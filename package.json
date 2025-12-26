@@ -1,0 +1,24 @@
+{
+  "name": "meiasoup-server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "DEBUG=mediasoup* nodemon index.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "express": "^4.21.2",
+    "mediasoup": "^3.14.9",
+    "mongoose": "^8.20.1",
+    "openai": "^6.9.1",
+    "pidusage": "^3.0.2",
+    "socket.io": "^4.7.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
