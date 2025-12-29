@@ -15,6 +15,8 @@ import { spawn } from "child_process";
 import { connectDatabase } from "./db.js";
 import { saveFinalTranscript } from "./services/transcriptService.js";
 import { sessionManager } from "./services/sessionManager.js";
+import { upsertMeeting } from "./services/meetingService.js";
+import apiRouter from "./routes/api.js";
 
 dotenv.config()
 
@@ -28,6 +30,8 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
+app.use(express.json());
+app.use("/api", apiRouter);
 app.use(express.static(path.join(__dirname, "dist")));
 
 app.get("*", (req, res) => {
@@ -261,10 +265,20 @@ function addUserCall(user, socket) {
     roomObj = { producers: [], creatorPeerId: user?.peerId, creatorSocketId: socket.id };
     rooms.set(user?.room, roomObj);
     isCreator = true;
+    upsertMeeting({
+      roomId: user?.room,
+      creatorPeerId: user?.peerId,
+      creatorSocketId: socket.id,
+    }).catch(() => {});
   } else if (!roomObj?.creatorPeerId && user?.isCreator) {
     roomObj = { ...roomObj, creatorPeerId: user?.peerId, creatorSocketId: socket.id };
     rooms.set(user?.room, roomObj);
     isCreator = true;
+    upsertMeeting({
+      roomId: user?.room,
+      creatorPeerId: user?.peerId,
+      creatorSocketId: socket.id,
+    }).catch(() => {});
   } else if (roomObj?.creatorPeerId === user?.peerId) {
     isCreator = true;
   }

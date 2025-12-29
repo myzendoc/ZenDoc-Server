@@ -1,5 +1,7 @@
 import { getRoomTranscript } from "./transcriptService.js";
 import { generateSoaps } from "./soapsService.js";
+import { createSoapNote } from "./soapNoteService.js";
+import { endMeeting } from "./meetingService.js";
 
 class SessionManager {
   constructor() {
@@ -32,6 +34,7 @@ class SessionManager {
     if (!roomId) return;
     const room = this.ensureRoom(roomId);
     room.sessionEnded = true;
+    endMeeting(roomId).catch(() => {});
   }
 
   stopAllProcesses(roomId) {
@@ -68,6 +71,9 @@ class SessionManager {
     const transcript = await getRoomTranscript(roomId);
     if (!transcript) return { transcript: "", soaps: null };
     const soaps = await generateSoaps(transcript);
+    if (soaps) {
+      await createSoapNote({ roomId, content: soaps });
+    }
     return { transcript, soaps };
   }
 
