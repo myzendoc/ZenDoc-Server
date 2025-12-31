@@ -3,8 +3,13 @@ import mongoose from "mongoose";
 const meetingSchema = new mongoose.Schema(
   {
     roomId: { type: String, required: true, unique: true, index: true },
+    title: { type: String },
+    description: { type: String },
+    scheduledFor: { type: Date },
+    startedAt: { type: Date },
     creatorPeerId: { type: String },
     creatorSocketId: { type: String },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     endedAt: { type: Date },
   },
   { timestamps: true }
