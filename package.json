@@ -10,11 +10,11 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "mediasoup": "^3.14.9",
     "mongoose": "^8.20.1",
-    "openai": "^6.9.1",
     "pidusage": "^3.0.2",
     "socket.io": "^4.7.4"
   },
