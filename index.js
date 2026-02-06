@@ -20,7 +20,9 @@ import apiRouter from "./routes/api.js";
 
 dotenv.config()
 
-connectDatabase().catch((err) => {
+connectDatabase().then(()=>{
+  console.log("Mongo connected");
+}).catch((err) => {
   console.error("Mongo connection error", err);
   process.exit(1);
 });

@@ -6,8 +6,13 @@ const userSchema = new mongoose.Schema(
     lastName: { type: String },
     email: { type: String, required: true, unique: true, index: true },
     password: { type: String, required: true },
+    displayName: { type: String },
+    meetingUrl: { type: String },
     role: { type: String, enum: ["provider", "admin"], default: "provider" },
     onboardingComplete: { type: Boolean, default: false },
+    verified: { type: Boolean, default: false },
+    otpCode: { type: String },
+    otpExpires: { type: Date },
   },
   { timestamps: true }
 );

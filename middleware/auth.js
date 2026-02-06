@@ -20,6 +20,10 @@ export async function requireAuth(req, res, next) {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
+    if (!user.verified) {
+      res.status(403).json({ error: "Email not verified" });
+      return;
+    }
     req.user = user;
     next();
   } catch (err) {
