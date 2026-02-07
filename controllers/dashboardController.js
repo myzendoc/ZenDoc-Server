@@ -3,8 +3,11 @@ import {
   getMeeting,
   getMeetingById,
   listMeetingsForUser,
+  listMeetingsWithCreators,
+  getMeetingWithCreator,
 } from "../services/meetingService.js";
 import { createSoapNote, getSoapNotesByMeeting } from "../services/soapNoteService.js";
+import { getTranscriptsByRoom } from "../services/transcriptService.js";
 
 function computeStatus(meeting) {
   const now = new Date();
@@ -59,7 +62,7 @@ export async function createDashboardMeeting(req, res) {
 export async function listDashboardMeetings(req, res) {
   try {
     const includeAll = req.user?.role === "admin";
-    const meetings = await listMeetingsForUser(req.user?._id, includeAll);
+    const meetings = await listMeetingsWithCreators(req.user?._id, includeAll);
     const enriched = meetings.map((item) => serializeMeeting(item, req));
     const active = enriched.filter((m) => m?.status !== "ended");
     const past = enriched.filter((m) => m?.status === "ended");
@@ -71,7 +74,7 @@ export async function listDashboardMeetings(req, res) {
 
 export async function getDashboardMeeting(req, res) {
   try {
-    const meeting = await getMeetingById(req.params.id);
+    const meeting = await getMeetingWithCreator(req.params.id);
     if (!meeting) {
       res.status(404).json({ error: "Not found" });
       return;
@@ -84,6 +87,39 @@ export async function getDashboardMeeting(req, res) {
     res.json({ meeting: serializeMeeting(meeting, req), notes });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch meeting" });
+  }
+}
+
+export async function listNotesMeetings(req, res) {
+  try {
+    const includeAll = req.user?.role === "admin";
+    const meetings = await listMeetingsWithCreators(req.user?._id, includeAll);
+    res.json({ meetings: meetings.map((m) => serializeMeeting(m, req)) });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch meetings" });
+  }
+}
+
+export async function getNotesMeeting(req, res) {
+  try {
+    const meeting = await getMeetingWithCreator(req.params.id);
+    if (!meeting) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    if (!canAccessMeeting(meeting, req.user)) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    const transcripts = await getTranscriptsByRoom(meeting.roomId);
+    const notes = await getSoapNotesByMeeting(meeting._id);
+    res.json({
+      meeting: serializeMeeting(meeting, req),
+      transcripts,
+      notes,
+    });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch meeting data" });
   }
 }
 

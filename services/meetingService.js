@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { Meeting } from "../models/meeting.js";
+import { User } from "../models/user.js";
 
 export async function upsertMeeting({ roomId, creatorPeerId, creatorSocketId }) {
   if (!roomId) return null;
@@ -59,4 +60,21 @@ export async function listMeetingsForUser(userId, includeAll = false) {
 export async function getMeetingById(id) {
   if (!id) return null;
   return Meeting.findById(id).lean();
+}
+
+export async function listMeetingsWithCreators(userId, includeAll = false) {
+  const filter = includeAll ? {} : { createdBy: userId };
+  const meetings = await Meeting.find(filter).sort({ createdAt: -1 }).lean();
+  const creatorIds = meetings.map((m) => m.createdBy).filter(Boolean);
+  const creators = await User.find({ _id: { $in: creatorIds } }).lean();
+  const map = new Map(creators.map((u) => [String(u._id), u]));
+  return meetings.map((m) => ({ ...m, creator: m.createdBy ? map.get(String(m.createdBy)) : null }));
+}
+
+export async function getMeetingWithCreator(id) {
+  if (!id) return null;
+  const meeting = await Meeting.findById(id).lean();
+  if (!meeting) return null;
+  const creator = meeting.createdBy ? await User.findById(meeting.createdBy).lean() : null;
+  return { ...meeting, creator };
 }

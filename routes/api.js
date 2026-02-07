@@ -9,6 +9,8 @@ import {
   getPublicMeeting,
   listDashboardMeetings,
   createMeetingNote,
+  listNotesMeetings,
+  getNotesMeeting,
 } from "../controllers/dashboardController.js";
 import { listUsers } from "../controllers/adminController.js";
 import { requireAdmin, requireAuth } from "../middleware/auth.js";
@@ -27,6 +29,8 @@ router.get("/dashboard/meetings", requireAuth, listDashboardMeetings);
 router.get("/dashboard/meetings/:id", requireAuth, getDashboardMeeting);
 router.post("/dashboard/meetings/:id/notes", requireAuth, createMeetingNote);
 router.get("/dashboard/meetings/:id/notes", requireAuth, getMeetingNotes);
+router.get("/notes/meetings", requireAuth, listNotesMeetings);
+router.get("/notes/meetings/:id", requireAuth, getNotesMeeting);
 
 router.get("/public/meetings/:roomId", getPublicMeeting);
 

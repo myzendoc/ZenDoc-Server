@@ -12,3 +12,8 @@ export async function getRoomTranscript(roomId) {
   const docs = await Transcript.find({ roomId }).sort({ createdAt: 1 }).lean();
   return docs.map((doc) => doc.text).join("\n");
 }
+
+export async function getTranscriptsByRoom(roomId) {
+  if (!roomId) return [];
+  return Transcript.find({ roomId }).sort({ createdAt: 1 }).lean();
+}
