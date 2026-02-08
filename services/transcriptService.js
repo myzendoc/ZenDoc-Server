@@ -17,3 +17,13 @@ export async function getTranscriptsByRoom(roomId) {
   if (!roomId) return [];
   return Transcript.find({ roomId }).sort({ createdAt: 1 }).lean();
 }
+
+export async function getParticipantsByRooms(roomIds = []) {
+  if (!roomIds.length) return 0;
+  const docs = await Transcript.find({ roomId: { $in: roomIds } }, { peerId: 1, roomId: 1 }).lean();
+  const uniquePeers = new Set();
+  docs.forEach((d) => {
+    if (d?.peerId) uniquePeers.add(`${d.roomId}:${d.peerId}`);
+  });
+  return uniquePeers.size;
+}
