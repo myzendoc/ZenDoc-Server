@@ -75,9 +75,170 @@ let producerObjects = new Map();
 let consumers = new Map();
 let consumerObjects = new Map();
 let uniquePipedProducers = [];
+let waitingRooms = new Map();
+
+function serializeWaitingUsers(room) {
+  const list = waitingRooms.get(room) || [];
+  return list.map((item) => ({
+    socketId: item.socketId,
+    peerId: item.peerId,
+    username: item.username,
+    room: item.room,
+    requestedAt: item.requestedAt,
+  }));
+}
+
+function emitWaitingUpdate(room) {
+  const waiting = serializeWaitingUsers(room);
+  io.to(`${room}-creator`).emit("waiting:update", { room, waiting });
+  io.to(`waiting-watch-${room}`).emit("waiting:update", { room, waiting });
+}
+
+function canManageWaiting(socket, room) {
+  if (!room) return false;
+  if (socket.rooms.has(`${room}-creator`)) return true;
+  const watchedRooms = socket.data?.waitingWatchRooms;
+  if (watchedRooms instanceof Set && watchedRooms.has(room)) return true;
+  return false;
+}
+
+function removeWaitingSocket(socketId) {
+  let changedRoom = null;
+  for (const [room, list] of waitingRooms.entries()) {
+    const next = list.filter((item) => item.socketId !== socketId);
+    if (next.length !== list.length) {
+      changedRoom = room;
+      if (next.length > 0) {
+        waitingRooms.set(room, next);
+      } else {
+        waitingRooms.delete(room);
+      }
+      emitWaitingUpdate(room);
+      break;
+    }
+  }
+  return changedRoom;
+}
 
 io.on("connection", (socket) => {
+  socket.data.waitingWatchRooms = new Set();
+
+  socket.on("waiting:watch", ({ rooms: roomsToWatch } = {}) => {
+    const prevRooms = socket.data?.waitingWatchRooms || new Set();
+    prevRooms.forEach((room) => {
+      socket.leave(`waiting-watch-${room}`);
+    });
+
+    const nextRooms = new Set(
+      Array.isArray(roomsToWatch)
+        ? roomsToWatch.filter((room) => typeof room === "string" && room.trim()).map((room) => room.trim())
+        : []
+    );
+
+    socket.data.waitingWatchRooms = nextRooms;
+    nextRooms.forEach((room) => {
+      socket.join(`waiting-watch-${room}`);
+      socket.emit("waiting:update", { room, waiting: serializeWaitingUsers(room) });
+    });
+  });
+
+  socket.on("waiting:request", ({ room, peerId, username } = {}, callback) => {
+    if (!room || !peerId || !username) {
+      callback?.({ error: "Missing waiting room payload" });
+      return;
+    }
+
+    const roomObj = rooms.get(room);
+    const creatorSocket = roomObj?.creatorSocketId ? io.sockets.sockets.get(roomObj.creatorSocketId) : null;
+    if (!roomObj || !roomObj?.creatorPeerId || !creatorSocket) {
+      callback?.({ autoAdmit: true });
+      return;
+    }
+
+    const list = waitingRooms.get(room) || [];
+    const alreadyWaiting = list.some((item) => item.socketId === socket.id || item.peerId === peerId);
+    if (!alreadyWaiting) {
+      list.push({
+        socketId: socket.id,
+        peerId,
+        username,
+        room,
+        requestedAt: Date.now(),
+      });
+      waitingRooms.set(room, list);
+      emitWaitingUpdate(room);
+    }
+
+    callback?.({ queued: true });
+  });
+
+  socket.on("waiting:approve", ({ room, socketId } = {}, callback) => {
+    if (!room || !socketId) {
+      callback?.({ error: "Missing waiting approval payload" });
+      return;
+    }
+    if (!canManageWaiting(socket, room)) {
+      callback?.({ error: "Not allowed" });
+      return;
+    }
+
+    const list = waitingRooms.get(room) || [];
+    const target = list.find((item) => item.socketId === socketId);
+    if (!target) {
+      callback?.({ error: "User not in waiting room" });
+      return;
+    }
+
+    const next = list.filter((item) => item.socketId !== socketId);
+    if (next.length > 0) {
+      waitingRooms.set(room, next);
+    } else {
+      waitingRooms.delete(room);
+    }
+
+    io.to(socketId).emit("waiting:approved", {
+      room,
+      peerId: target.peerId,
+      username: target.username,
+    });
+    emitWaitingUpdate(room);
+    callback?.({ status: "ok" });
+  });
+
+  socket.on("waiting:reject", ({ room, socketId } = {}, callback) => {
+    if (!room || !socketId) {
+      callback?.({ error: "Missing waiting reject payload" });
+      return;
+    }
+    if (!canManageWaiting(socket, room)) {
+      callback?.({ error: "Not allowed" });
+      return;
+    }
+
+    const list = waitingRooms.get(room) || [];
+    const target = list.find((item) => item.socketId === socketId);
+    if (!target) {
+      callback?.({ error: "User not in waiting room" });
+      return;
+    }
+
+    const next = list.filter((item) => item.socketId !== socketId);
+    if (next.length > 0) {
+      waitingRooms.set(room, next);
+    } else {
+      waitingRooms.delete(room);
+    }
+
+    io.to(socketId).emit("waiting:rejected", {
+      room,
+      message: "Host denied your request",
+    });
+    emitWaitingUpdate(room);
+    callback?.({ status: "ok" });
+  });
+
   socket.on("addUserCall", (user, callback) => {
+    removeWaitingSocket(socket.id);
     const isCreator = addUserCall(user, socket);
     callback?.({ isCreator });
   });
@@ -199,6 +360,7 @@ io.on("connection", (socket) => {
       rooms.set(room, { ...roomObj, producers: producersFilter });
     } else {
       rooms.delete(room);
+      waitingRooms.delete(room);
       sessionManager.markSessionEnded(room);
     }
 
@@ -216,6 +378,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnecting", () => {
+    removeWaitingSocket(socket.id);
     handleDisconnecting(socket);
   });
 });
@@ -818,6 +981,7 @@ function handleDisconnecting(socket) {
         rooms.set(room, { ...rooms.get(room), producers: remainingProducers });
       } else {
         rooms.delete(room);
+        waitingRooms.delete(room);
         sessionManager.markSessionEnded(room);
       }
 
