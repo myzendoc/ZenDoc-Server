@@ -5,6 +5,7 @@ import { Meeting } from "../models/meeting.js";
 
 const ITERATIONS = 120000;
 const OTP_TTL_MINUTES = 10;
+const ENV_ADMIN_SUB = "env-admin";
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
   const derived = crypto.pbkdf2Sync(password, salt, ITERATIONS, 64, "sha512").toString("hex");
@@ -28,6 +29,34 @@ export function sanitizeUser(user) {
   return obj;
 }
 
+function getAdminTokenSecret() {
+  return process.env.ADMIN_JWT_SECRET || process.env.JWT_SECRET;
+}
+
+function getEnvAdminIdentity() {
+  const email = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
+  const password = process.env.ADMIN_PASSWORD || "";
+  if (!email || !password) return null;
+  return {
+    _id: ENV_ADMIN_SUB,
+    id: ENV_ADMIN_SUB,
+    firstName: process.env.ADMIN_FIRST_NAME || "Admin",
+    lastName: process.env.ADMIN_LAST_NAME || "",
+    email,
+    role: "admin",
+    onboardingComplete: true,
+    verified: true,
+  };
+}
+
+export function getEnvAdminUserFromPayload(payload) {
+  if (!payload || payload.sub !== ENV_ADMIN_SUB || payload.role !== "admin") return null;
+  const admin = getEnvAdminIdentity();
+  if (!admin) return null;
+  if (payload.email && payload.email.toLowerCase() !== admin.email) return null;
+  return sanitizeUser(admin);
+}
+
 export async function createUser({ firstName, lastName, email, password, role = "provider" }) {
   if (!firstName || !email || !password) throw new Error("Missing required fields");
   const existing = await User.findOne({ email: email.toLowerCase() });
@@ -48,6 +77,15 @@ export async function createUser({ firstName, lastName, email, password, role = 
 
 export async function authenticateUser(email, password) {
   if (!email || !password) throw new Error("Missing credentials");
+  const admin = getEnvAdminIdentity();
+  const inputEmail = email.toLowerCase();
+  if (admin && inputEmail === admin.email && password === process.env.ADMIN_PASSWORD) {
+    const token = signToken(
+      { sub: ENV_ADMIN_SUB, role: "admin", email: admin.email, typ: "admin" },
+      getAdminTokenSecret()
+    );
+    return { user: sanitizeUser(admin), token };
+  }
   const user = await User.findOne({ email: email.toLowerCase() });
   if (!user) throw new Error("Invalid credentials");
   const valid = verifyPassword(password, user.password);

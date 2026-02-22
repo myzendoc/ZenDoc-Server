@@ -1,5 +1,5 @@
 import { verifyToken } from "../utils/jwt.js";
-import { getUserById } from "../services/userService.js";
+import { getEnvAdminUserFromPayload, getUserById } from "../services/userService.js";
 
 function extractToken(req) {
   const header = req.headers?.authorization || "";
@@ -10,22 +10,35 @@ function extractToken(req) {
 export async function requireAuth(req, res, next) {
   try {
     const token = extractToken(req);
-    const payload = verifyToken(token, process.env.JWT_SECRET);
-    if (!payload?.sub) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
+    const jwtPayload = verifyToken(token, process.env.JWT_SECRET);
+    if (jwtPayload?.sub) {
+      const envAdminUser = getEnvAdminUserFromPayload(jwtPayload);
+      if (envAdminUser) {
+        req.user = envAdminUser;
+        next();
+        return;
+      }
+      const user = await getUserById(jwtPayload.sub);
+      if (user) {
+        if (!user.verified) {
+          res.status(403).json({ error: "Email not verified" });
+          return;
+        }
+        req.user = user;
+        next();
+        return;
+      }
     }
-    const user = await getUserById(payload.sub);
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
+    if (process.env.ADMIN_JWT_SECRET) {
+      const adminPayload = verifyToken(token, process.env.ADMIN_JWT_SECRET);
+      const envAdminUser = getEnvAdminUserFromPayload(adminPayload);
+      if (envAdminUser) {
+        req.user = envAdminUser;
+        next();
+        return;
+      }
     }
-    if (!user.verified) {
-      res.status(403).json({ error: "Email not verified" });
-      return;
-    }
-    req.user = user;
-    next();
+    res.status(401).json({ error: "Unauthorized" });
   } catch (err) {
     res.status(401).json({ error: "Unauthorized" });
   }
