@@ -93,6 +93,7 @@ export async function getDashboardMeeting(req, res) {
 export async function listNotesMeetings(req, res) {
   try {
     const includeAll = req.user?.role === "admin";
+    console.log("User:", req.user);
     const meetings = await listMeetingsWithCreators(req.user?._id, includeAll);
     res.json({ meetings: meetings.map((m) => serializeMeeting(m, req)) });
   } catch {
