@@ -20,6 +20,21 @@ function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(derived));
 }
 
+function extractRoomCode(value = "") {
+  const input = String(value || "").trim();
+  if (!input) return "";
+  if (!/^https?:\/\//i.test(input)) return input.replace(/^\/+/, "").split(/[/?#]/)[0];
+  try {
+    const parsed = new URL(input);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const roomIndex = segments.findIndex((segment) => segment === "room");
+    if (roomIndex !== -1 && segments[roomIndex + 1]) return segments[roomIndex + 1];
+    return segments[0] || "";
+  } catch {
+    return "";
+  }
+}
+
 export function sanitizeUser(user) {
   if (!user) return null;
   const obj = user.toObject ? user.toObject() : user;
@@ -116,6 +131,16 @@ export async function updateUserProfile(userId, payload = {}) {
   if (Object.keys(updates).length === 0) return getUserById(userId);
   if (updates.firstName || updates.displayName || updates.meetingUrl) updates.onboardingComplete = true;
   const user = await User.findByIdAndUpdate(userId, { $set: updates }, { new: true });
+  if (updates.meetingUrl) {
+    const roomId = extractRoomCode(updates.meetingUrl);
+    if (roomId) {
+      await Meeting.findOneAndUpdate(
+        { roomId },
+        { $setOnInsert: { roomId, createdBy: userId } },
+        { new: true, upsert: true }
+      );
+    }
+  }
   return sanitizeUser(user);
 }
 

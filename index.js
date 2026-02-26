@@ -15,7 +15,7 @@ import { spawn } from "child_process";
 import { connectDatabase } from "./db.js";
 import { saveFinalTranscript } from "./services/transcriptService.js";
 import { sessionManager } from "./services/sessionManager.js";
-import { upsertMeeting } from "./services/meetingService.js";
+import { getMeeting, upsertMeeting } from "./services/meetingService.js";
 import apiRouter from "./routes/api.js";
 
 dotenv.config()
@@ -142,9 +142,14 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("waiting:request", ({ room, peerId, username } = {}, callback) => {
+  socket.on("waiting:request", async ({ room, peerId, username } = {}, callback) => {
     if (!room || !peerId || !username) {
       callback?.({ error: "Missing waiting room payload" });
+      return;
+    }
+    const meeting = await getMeeting(room);
+    if (!meeting) {
+      callback?.({ error: "Invalid room link" });
       return;
     }
 
@@ -237,10 +242,10 @@ io.on("connection", (socket) => {
     callback?.({ status: "ok" });
   });
 
-  socket.on("addUserCall", (user, callback) => {
+  socket.on("addUserCall", async (user, callback) => {
     removeWaitingSocket(socket.id);
-    const isCreator = addUserCall(user, socket);
-    callback?.({ isCreator });
+    const result = await addUserCall(user, socket);
+    callback?.(result);
   });
 
   socket.on("getRTPCapabilites", (callback) => {
@@ -432,8 +437,10 @@ async function startMediasoup() {
 
 startMediasoup();
 
-function addUserCall(user, socket) {
-  if (!user?.room) return false;
+async function addUserCall(user, socket) {
+  if (!user?.room) return { error: "Missing room id" };
+  const meeting = await getMeeting(user.room);
+  if (!meeting) return { error: "Invalid room link" };
   let roomObj = rooms.get(user?.room);
   let isCreator = false;
 
@@ -466,7 +473,7 @@ function addUserCall(user, socket) {
   }
   const filteredProducers = rooms.get(user?.room)?.producers;
   socket.emit("currentProducers", filteredProducers);
-  return isCreator;
+  return { isCreator };
 }
 
 async function getMinCPUUsageRouter(routers) {
