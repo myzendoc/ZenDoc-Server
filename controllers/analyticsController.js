@@ -1,4 +1,4 @@
-import { listMeetingsForUser } from "../services/meetingService.js";
+import { listMeetingSessionsWithContext } from "../services/meetingSessionService.js";
 import { getParticipantsByRooms } from "../services/transcriptService.js";
 
 function monthKey(date) {
@@ -17,7 +17,7 @@ function monthLabel(key) {
 export async function getAnalyticsSummary(req, res) {
   try {
     const includeAll = req.user?.role === "admin";
-    const meetings = await listMeetingsForUser(req.user?._id, includeAll);
+    const sessions = await listMeetingSessionsWithContext(req.user?._id, includeAll);
     const now = new Date();
     const currentMonthKey = `${now.getFullYear()}-${now.getMonth() + 1}`;
 
@@ -27,14 +27,14 @@ export async function getAnalyticsSummary(req, res) {
     const monthCounts = new Map();
     const monthMinutes = new Map();
 
-    meetings.forEach((m) => {
+    sessions.forEach((m) => {
       totalSessions += 1;
-      const start = m.startedAt || m.createdAt || m.scheduledFor;
-      const end = m.endedAt || m.startedAt || m.createdAt || m.scheduledFor;
+      const start = m.startedAt || m.createdAt;
+      const end = m.endedAt || m.startedAt || m.createdAt;
       const durationMs = start && end ? Math.max(new Date(end) - new Date(start), 0) : 0;
       const durationMin = durationMs / 60000;
       totalMinutes += durationMin;
-      const key = monthKey(start || end || m.createdAt);
+      const key = monthKey(start || end);
       if (key) {
         monthCounts.set(key, (monthCounts.get(key) || 0) + 1);
         monthMinutes.set(key, (monthMinutes.get(key) || 0) + durationMin);
@@ -64,7 +64,7 @@ export async function getAnalyticsSummary(req, res) {
       }
     });
 
-    const roomIds = meetings.map((m) => m.roomId).filter(Boolean);
+    const roomIds = sessions.map((m) => m.roomId).filter(Boolean);
     const participants = await getParticipantsByRooms(roomIds);
 
     res.json({

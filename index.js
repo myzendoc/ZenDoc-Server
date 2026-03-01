@@ -15,7 +15,7 @@ import { spawn } from "child_process";
 import { connectDatabase } from "./db.js";
 import { saveFinalTranscript } from "./services/transcriptService.js";
 import { sessionManager } from "./services/sessionManager.js";
-import { getMeeting, upsertMeeting } from "./services/meetingService.js";
+import { getMeeting } from "./services/meetingService.js";
 import apiRouter from "./routes/api.js";
 
 dotenv.config()
@@ -366,7 +366,7 @@ io.on("connection", (socket) => {
     } else {
       rooms.delete(room);
       waitingRooms.delete(room);
-      sessionManager.markSessionEnded(room);
+      sessionManager.endSession(room).catch((err) => console.error("Session finalize error", err));
     }
 
     callback({
@@ -448,20 +448,14 @@ async function addUserCall(user, socket) {
     roomObj = { producers: [], creatorPeerId: user?.peerId, creatorSocketId: socket.id };
     rooms.set(user?.room, roomObj);
     isCreator = true;
-    upsertMeeting({
-      roomId: user?.room,
+    await sessionManager.startSession(user?.room, {
       creatorPeerId: user?.peerId,
       creatorSocketId: socket.id,
-    }).catch(() => {});
+    });
   } else if (!roomObj?.creatorPeerId && user?.isCreator) {
     roomObj = { ...roomObj, creatorPeerId: user?.peerId, creatorSocketId: socket.id };
     rooms.set(user?.room, roomObj);
     isCreator = true;
-    upsertMeeting({
-      roomId: user?.room,
-      creatorPeerId: user?.peerId,
-      creatorSocketId: socket.id,
-    }).catch(() => {});
   } else if (roomObj?.creatorPeerId === user?.peerId) {
     isCreator = true;
   }
@@ -671,7 +665,14 @@ async function produce(data, socket, callback) {
           const msg = JSON.parse(line);
           io.to(`${roomId}-creator`).emit('transcript',{msg, peerId})
           if (msg?.isFinal) {
-            saveFinalTranscript({ roomId, peerId, text: msg?.text }).catch((err) =>
+            const session = sessionManager.getSessionContext(roomId);
+            saveFinalTranscript({
+              roomId,
+              peerId,
+              text: msg?.text,
+              sessionIndex: session?.sessionIndex,
+              meetingSessionId: session?.sessionId,
+            }).catch((err) =>
               console.error("Transcript save error", err)
             );
           }
@@ -989,7 +990,7 @@ function handleDisconnecting(socket) {
       } else {
         rooms.delete(room);
         waitingRooms.delete(room);
-        sessionManager.markSessionEnded(room);
+        sessionManager.endSession(room).catch((err) => console.error("Session finalize error", err));
       }
 
       socket.broadcast.to(room).emit("userLeft", user);

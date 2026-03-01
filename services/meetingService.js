@@ -8,7 +8,7 @@ export async function upsertMeeting({ roomId, creatorPeerId, creatorSocketId }) 
   const meeting = await Meeting.findOneAndUpdate(
     { roomId },
     {
-      $setOnInsert: { roomId, startedAt: now },
+      $setOnInsert: { roomId, startedAt: now, sessionsCount: 0 },
       $set: { creatorPeerId, creatorSocketId },
     },
     { new: true, upsert: true }

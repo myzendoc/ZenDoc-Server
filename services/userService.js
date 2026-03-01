@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { User } from "../models/user.js";
 import { signToken } from "../utils/jwt.js";
 import { Meeting } from "../models/meeting.js";
+import { MeetingSession } from "../models/meetingSession.js";
 
 const ITERATIONS = 120000;
 const OTP_TTL_MINUTES = 10;
@@ -146,13 +147,13 @@ export async function updateUserProfile(userId, payload = {}) {
 
 export async function listUsersWithMeetingCounts() {
   const users = await User.find({}).sort({ createdAt: -1 }).lean();
-  const meetingCounts = await Meeting.aggregate([
-    { $match: { createdBy: { $exists: true } } },
+  const meetingCounts = await MeetingSession.aggregate([
+    { $match: { createdBy: { $exists: true, $ne: null } } },
     {
       $group: {
         _id: "$createdBy",
         count: { $sum: 1 },
-        lastMeetingAt: { $max: "$createdAt" },
+        lastMeetingAt: { $max: "$startedAt" },
       },
     },
   ]);

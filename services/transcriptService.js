@@ -1,29 +1,40 @@
 import { Transcript } from "../models/transcript.js";
 
-export async function saveFinalTranscript({ roomId, peerId, text }) {
+export async function saveFinalTranscript({ roomId, peerId, text, sessionIndex, meetingSessionId }) {
   if (!roomId || !text) return null;
   const trimmed = text.trim();
   if (!trimmed) return null;
-  return Transcript.create({ roomId, peerId, text: trimmed });
+  return Transcript.create({ roomId, peerId, text: trimmed, sessionIndex, meetingSessionId });
 }
 
-export async function getRoomTranscript(roomId) {
+export async function getRoomTranscript(roomId, sessionIndex) {
   if (!roomId) return "";
-  const docs = await Transcript.find({ roomId }).sort({ createdAt: 1 }).lean();
+  const filter = { roomId };
+  if (sessionIndex !== undefined && sessionIndex !== null) {
+    filter.sessionIndex = sessionIndex;
+  }
+  const docs = await Transcript.find(filter).sort({ createdAt: 1 }).lean();
   return docs.map((doc) => doc.text).join("\n");
 }
 
-export async function getTranscriptsByRoom(roomId) {
+export async function getTranscriptsByRoom(roomId, options = {}) {
   if (!roomId) return [];
-  return Transcript.find({ roomId }).sort({ createdAt: 1 }).lean();
+  const filter = { roomId };
+  if (options.sessionIndex !== undefined && options.sessionIndex !== null) {
+    filter.sessionIndex = options.sessionIndex;
+  }
+  if (options.meetingSessionId) {
+    filter.meetingSessionId = options.meetingSessionId;
+  }
+  return Transcript.find(filter).sort({ createdAt: 1 }).lean();
 }
 
 export async function getParticipantsByRooms(roomIds = []) {
   if (!roomIds.length) return 0;
-  const docs = await Transcript.find({ roomId: { $in: roomIds } }, { peerId: 1, roomId: 1 }).lean();
+  const docs = await Transcript.find({ roomId: { $in: roomIds } }, { peerId: 1, roomId: 1, sessionIndex: 1 }).lean();
   const uniquePeers = new Set();
   docs.forEach((d) => {
-    if (d?.peerId) uniquePeers.add(`${d.roomId}:${d.peerId}`);
+    if (d?.peerId) uniquePeers.add(`${d.roomId}:${d.sessionIndex ?? 0}:${d.peerId}`);
   });
   return uniquePeers.size;
 }

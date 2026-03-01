@@ -11,6 +11,8 @@ const meetingSchema = new mongoose.Schema(
     creatorSocketId: { type: String },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     endedAt: { type: Date },
+    sessionsCount: { type: Number, default: 0 },
+    currentSessionIndex: { type: Number },
   },
   { timestamps: true }
 );
