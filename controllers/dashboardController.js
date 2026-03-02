@@ -5,9 +5,11 @@ import {
   getMeetingWithCreator,
 } from "../services/meetingService.js";
 import {
+  deleteMeetingSessionWithData,
   getMeetingSessionWithContext,
   listMeetingSessionsForMeeting,
   listMeetingSessionsWithContext,
+  renameMeetingSession,
 } from "../services/meetingSessionService.js";
 import { createSoapNote, getSoapNotesByMeeting, getSoapNotesBySession } from "../services/soapNoteService.js";
 import { getTranscriptsByRoom } from "../services/transcriptService.js";
@@ -28,6 +30,16 @@ function buildClientBase(req) {
   return `${req.protocol}://${req.get("host")}`;
 }
 
+function normalizeSessionTitle(sessionTitle, meetingTitle) {
+  const legacySessionPattern = /^session\s+\d+$/i;
+  const safeSessionTitle = typeof sessionTitle === "string" ? sessionTitle.trim() : "";
+  const safeMeetingTitle = typeof meetingTitle === "string" ? meetingTitle.trim() : "";
+
+  if (safeSessionTitle && !legacySessionPattern.test(safeSessionTitle)) return safeSessionTitle;
+  if (safeMeetingTitle && safeMeetingTitle.toLowerCase() !== "untitled meeting") return safeMeetingTitle;
+  return "Meeting";
+}
+
 function serializeSessionRecord(record, req) {
   if (!record) return null;
   const meeting = record.meeting || record;
@@ -38,6 +50,7 @@ function serializeSessionRecord(record, req) {
 
   return {
     ...meeting,
+    title: normalizeSessionTitle(record.title, meeting.title),
     _id: record._id || meeting._id,
     meetingId: meeting._id,
     creatorPeerId: record.creatorPeerId || meeting.creatorPeerId,
@@ -170,13 +183,62 @@ export async function getNotesMeeting(req, res) {
       ? await getSoapNotesByMeeting(session.meeting._id)
       : await getSoapNotesBySession(session._id);
 
+    const soapProcessing = !notes.length && transcripts.length > 0 && Boolean(session.endedAt || session?.meeting?.endedAt);
+
     res.json({
       meeting: serializeSessionRecord(session, req),
       transcripts,
       notes,
+      soapProcessing,
     });
   } catch {
     res.status(500).json({ error: "Failed to fetch meeting data" });
+  }
+}
+
+export async function renameNotesMeeting(req, res) {
+  try {
+    const session = await getMeetingSessionWithContext(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    if (!canAccessMeeting(session.meeting, req.user)) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    const title = String(req.body?.title || "").trim();
+    if (!title) {
+      res.status(400).json({ error: "Session title is required" });
+      return;
+    }
+    const updated = await renameMeetingSession(session._id, title);
+    if (!updated) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const refreshed = await getMeetingSessionWithContext(session._id);
+    res.json({ meeting: serializeSessionRecord(refreshed, req) });
+  } catch {
+    res.status(400).json({ error: "Failed to rename meeting session" });
+  }
+}
+
+export async function deleteNotesMeeting(req, res) {
+  try {
+    const session = await getMeetingSessionWithContext(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    if (!canAccessMeeting(session.meeting, req.user)) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    await deleteMeetingSessionWithData(session._id);
+    res.json({ status: "ok" });
+  } catch {
+    res.status(400).json({ error: "Failed to delete meeting session" });
   }
 }
 

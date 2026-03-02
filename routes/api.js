@@ -4,6 +4,7 @@ import { createSoap, fetchSoap, fetchSoaps } from "../controllers/soapNoteContro
 import { signup, login, me, updateProfile, sendOtp, verifyOtp } from "../controllers/authController.js";
 import {
   createDashboardMeeting,
+  deleteNotesMeeting,
   getDashboardMeeting,
   getMeetingNotes,
   getPublicMeeting,
@@ -11,6 +12,7 @@ import {
   createMeetingNote,
   listNotesMeetings,
   getNotesMeeting,
+  renameNotesMeeting,
 } from "../controllers/dashboardController.js";
 import { getAdminDashboard, listUsers } from "../controllers/adminController.js";
 import { requireAdmin, requireAuth } from "../middleware/auth.js";
@@ -32,6 +34,8 @@ router.post("/dashboard/meetings/:id/notes", requireAuth, createMeetingNote);
 router.get("/dashboard/meetings/:id/notes", requireAuth, getMeetingNotes);
 router.get("/notes/meetings", requireAuth, listNotesMeetings);
 router.get("/notes/meetings/:id", requireAuth, getNotesMeeting);
+router.patch("/notes/meetings/:id", requireAuth, renameNotesMeeting);
+router.delete("/notes/meetings/:id", requireAuth, deleteNotesMeeting);
 
 router.get("/public/meetings/:roomId", getPublicMeeting);
 

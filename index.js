@@ -17,6 +17,7 @@ import { saveFinalTranscript } from "./services/transcriptService.js";
 import { sessionManager } from "./services/sessionManager.js";
 import { getMeeting } from "./services/meetingService.js";
 import apiRouter from "./routes/api.js";
+import { verifyToken } from "./utils/jwt.js";
 
 dotenv.config()
 
@@ -76,6 +77,32 @@ let consumers = new Map();
 let consumerObjects = new Map();
 let uniquePipedProducers = [];
 let waitingRooms = new Map();
+
+function extractUserIdFromToken(authToken) {
+  if (!authToken) return null;
+  const payload = verifyToken(authToken, process.env.JWT_SECRET);
+  if (payload?.sub) return String(payload.sub);
+  if (process.env.ADMIN_JWT_SECRET) {
+    const adminPayload = verifyToken(authToken, process.env.ADMIN_JWT_SECRET);
+    if (adminPayload?.sub) return String(adminPayload.sub);
+  }
+  return null;
+}
+
+function isMeetingCreatorJoin(meeting, user = {}) {
+  if (!meeting) return false;
+  const meetingCreatorId = meeting?.createdBy ? String(meeting.createdBy) : "";
+  const tokenUserId = extractUserIdFromToken(user?.authToken);
+  const payloadUserId = user?.userId ? String(user.userId) : "";
+
+  if (meetingCreatorId) {
+    if (tokenUserId && tokenUserId === meetingCreatorId) return true;
+    if (payloadUserId && payloadUserId === meetingCreatorId) return true;
+    return false;
+  }
+
+  return Boolean(user?.isCreator);
+}
 
 function serializeWaitingUsers(room) {
   const list = waitingRooms.get(room) || [];
@@ -142,7 +169,7 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("waiting:request", async ({ room, peerId, username } = {}, callback) => {
+  socket.on("waiting:request", async ({ room, peerId, username, authToken, userId, isCreator } = {}, callback) => {
     if (!room || !peerId || !username) {
       callback?.({ error: "Missing waiting room payload" });
       return;
@@ -155,7 +182,29 @@ io.on("connection", (socket) => {
 
     const roomObj = rooms.get(room);
     const creatorSocket = roomObj?.creatorSocketId ? io.sockets.sockets.get(roomObj.creatorSocketId) : null;
+    const isRequesterCreator = isMeetingCreatorJoin(meeting, { room, peerId, username, authToken, userId, isCreator });
     if (!roomObj || !roomObj?.creatorPeerId || !creatorSocket) {
+      if (isRequesterCreator) {
+        callback?.({ autoAdmit: true });
+        return;
+      }
+      const list = waitingRooms.get(room) || [];
+      const alreadyWaiting = list.some((item) => item.socketId === socket.id || item.peerId === peerId);
+      if (!alreadyWaiting) {
+        list.push({
+          socketId: socket.id,
+          peerId,
+          username,
+          room,
+          requestedAt: Date.now(),
+        });
+        waitingRooms.set(room, list);
+        emitWaitingUpdate(room);
+      }
+      callback?.({ queued: true });
+      return;
+    }
+    if (isRequesterCreator) {
       callback?.({ autoAdmit: true });
       return;
     }
@@ -443,19 +492,30 @@ async function addUserCall(user, socket) {
   if (!meeting) return { error: "Invalid room link" };
   let roomObj = rooms.get(user?.room);
   let isCreator = false;
+  const creatorJoin = isMeetingCreatorJoin(meeting, user);
 
   if (!roomObj) {
-    roomObj = { producers: [], creatorPeerId: user?.peerId, creatorSocketId: socket.id };
+    roomObj = {
+      producers: [],
+      creatorPeerId: creatorJoin ? user?.peerId : null,
+      creatorSocketId: creatorJoin ? socket.id : null
+    };
+    rooms.set(user?.room, roomObj);
+    isCreator = creatorJoin;
+    if (isCreator) {
+      await sessionManager.startSession(user?.room, {
+        creatorPeerId: user?.peerId,
+        creatorSocketId: socket.id,
+      });
+    }
+  } else if (!roomObj?.creatorPeerId && creatorJoin) {
+    roomObj = { ...roomObj, creatorPeerId: user?.peerId, creatorSocketId: socket.id };
     rooms.set(user?.room, roomObj);
     isCreator = true;
     await sessionManager.startSession(user?.room, {
       creatorPeerId: user?.peerId,
       creatorSocketId: socket.id,
     });
-  } else if (!roomObj?.creatorPeerId && user?.isCreator) {
-    roomObj = { ...roomObj, creatorPeerId: user?.peerId, creatorSocketId: socket.id };
-    rooms.set(user?.room, roomObj);
-    isCreator = true;
   } else if (roomObj?.creatorPeerId === user?.peerId) {
     isCreator = true;
   }

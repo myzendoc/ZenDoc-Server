@@ -1,6 +1,8 @@
 import { Meeting } from "../models/meeting.js";
 import { MeetingSession } from "../models/meetingSession.js";
 import { User } from "../models/user.js";
+import { Transcript } from "../models/transcript.js";
+import { SoapNote } from "../models/soapNote.js";
 
 export async function startMeetingSession({ roomId, creatorPeerId, creatorSocketId }) {
   if (!roomId) return null;
@@ -22,6 +24,7 @@ export async function startMeetingSession({ roomId, creatorPeerId, creatorSocket
   const session = await MeetingSession.create({
     meetingId: meeting._id,
     roomId,
+    title: meeting.title || "Meeting",
     sessionIndex: nextIndex,
     startedAt: now,
     creatorPeerId: creatorPeerId || meeting.creatorPeerId,
@@ -102,4 +105,35 @@ export async function listMeetingSessionsForMeeting(meetingId) {
 export async function getLatestMeetingSessionForRoom(roomId) {
   if (!roomId) return null;
   return MeetingSession.findOne({ roomId }).sort({ sessionIndex: -1 }).lean();
+}
+
+export async function renameMeetingSession(sessionId, title) {
+  if (!sessionId) return null;
+  const nextTitle = String(title || "").trim();
+  if (!nextTitle) throw new Error("Session title is required");
+  return MeetingSession.findByIdAndUpdate(sessionId, { $set: { title: nextTitle } }, { new: true }).lean();
+}
+
+export async function deleteMeetingSessionWithData(sessionId) {
+  if (!sessionId) return null;
+  const session = await MeetingSession.findById(sessionId).lean();
+  if (!session) return null;
+
+  await Promise.all([
+    Transcript.deleteMany({ meetingSessionId: session._id }),
+    SoapNote.deleteMany({ meetingSessionId: session._id }),
+    MeetingSession.deleteOne({ _id: session._id }),
+  ]);
+
+  const hasRemainingSessions = await MeetingSession.exists({ meetingId: session.meetingId });
+  if (!hasRemainingSessions) {
+    await Meeting.findByIdAndUpdate(session.meetingId, { $set: { currentSessionIndex: null, endedAt: null } });
+  } else {
+    const latest = await MeetingSession.findOne({ meetingId: session.meetingId }).sort({ sessionIndex: -1 }).lean();
+    await Meeting.findByIdAndUpdate(session.meetingId, {
+      $set: { currentSessionIndex: latest?.sessionIndex ?? null },
+    });
+  }
+
+  return session;
 }
