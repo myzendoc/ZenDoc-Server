@@ -150,10 +150,28 @@ export async function listUsersWithMeetingCounts() {
   const meetingCounts = await MeetingSession.aggregate([
     { $match: { createdBy: { $exists: true, $ne: null } } },
     {
+      $project: {
+        createdBy: 1,
+        startedAt: 1,
+        durationMs: {
+          $max: [
+            {
+              $subtract: [
+                { $ifNull: ["$endedAt", "$startedAt"] },
+                { $ifNull: ["$startedAt", "$createdAt"] },
+              ],
+            },
+            0,
+          ],
+        },
+      },
+    },
+    {
       $group: {
         _id: "$createdBy",
         count: { $sum: 1 },
         lastMeetingAt: { $max: "$startedAt" },
+        totalDurationMs: { $sum: "$durationMs" },
       },
     },
   ]);
@@ -164,6 +182,7 @@ export async function listUsersWithMeetingCounts() {
       ...sanitizeUser(user),
       meetingCount: stats.count || 0,
       lastMeetingAt: stats.lastMeetingAt || null,
+      totalMeetingSeconds: Math.max(0, Math.floor((stats.totalDurationMs || 0) / 1000)),
     };
   });
 }

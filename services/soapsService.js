@@ -54,7 +54,12 @@ No generic templates.
 
 Explain mechanisms briefly when clinically relevant (e.g., lab artifacts, physiology).
 
-Assume the reader is another clinician.`
+Assume the reader is another clinician.
+
+Format:
+Instead of paragraphs, prefer points
+Make sure each point is a new line starting with an dash(-) for easy read.
+`
 
 let model;
 
