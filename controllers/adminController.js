@@ -30,7 +30,12 @@ function toDashboardUser(user) {
 export async function listUsers(req, res) {
   try {
     const users = await listUsersWithMeetingCounts();
-    res.json({ users, dashboardUsers: users.map(toDashboardUser) });
+    res.json({
+      users,
+      dashboardUsers: users.map(toDashboardUser),
+      totalUsers: users.length,
+      total: users.length,
+    });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch users" });
   }
@@ -41,6 +46,7 @@ export async function getAdminDashboard(req, res) {
     const users = await listUsersWithMeetingCounts();
     res.json({
       users: users.map(toDashboardUser),
+      totalUsers: users.length,
       total: users.length,
     });
   } catch (err) {

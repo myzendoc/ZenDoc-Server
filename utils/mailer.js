@@ -29,3 +29,24 @@ export async function sendOtpEmail(email, code) {
     html,
   });
 }
+
+export async function sendPasswordResetEmail(email, resetLink) {
+  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+    throw new Error("SMTP credentials missing");
+  }
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 420px; margin: 0 auto; color: #0b1f6b; border: 1px solid #e6e6e6; border-radius: 8px; padding: 16px;">
+      <h2 style="margin: 0 0 8px; font-weight: 700; font-size: 20px;">Reset your ZenDoc password</h2>
+      <p style="margin: 0 0 12px; color: #555;">Use the button below to set a new password.</p>
+      <a href="${resetLink}" style="display: inline-block; background: #0b1f6b; color: #fff; text-decoration: none; font-weight: 700; padding: 12px 18px; border-radius: 8px;">Reset Password</a>
+      <p style="margin: 14px 0 0; color: #777;">This link expires in 30 minutes.</p>
+      <p style="margin: 8px 0 0; color: #777; word-break: break-all;">${resetLink}</p>
+    </div>
+  `;
+  await transporter.sendMail({
+    from: process.env.SMTP_USER,
+    to: email,
+    subject: "Reset your ZenDoc password",
+    html,
+  });
+}

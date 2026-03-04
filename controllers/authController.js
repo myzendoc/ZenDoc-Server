@@ -1,5 +1,14 @@
-import { authenticateUser, createUser, issueOtpForUser, updateUserProfile, verifyOtpForUser, findUserByEmail } from "../services/userService.js";
-import { sendOtpEmail } from "../utils/mailer.js";
+import {
+  authenticateUser,
+  createUser,
+  issueOtpForUser,
+  updateUserProfile,
+  verifyOtpForUser,
+  findUserByEmail,
+  issuePasswordResetForEmail,
+  resetPasswordWithToken,
+} from "../services/userService.js";
+import { sendOtpEmail, sendPasswordResetEmail } from "../utils/mailer.js";
 
 function resolveRole(adminCode) {
   if (adminCode && process.env.ADMIN_INVITE_CODE && adminCode === process.env.ADMIN_INVITE_CODE) {
@@ -82,5 +91,49 @@ export async function verifyOtp(req, res) {
     res.json(verified);
   } catch (err) {
     res.status(400).json({ error: err.message || "Failed to verify OTP" });
+  }
+}
+
+function getClientBaseUrl(req) {
+  const envBase = String(process.env.CLIENT_APP_URL || "").trim().replace(/\/$/, "");
+  if (envBase) return envBase;
+  const origin = String(req.headers?.origin || "").trim().replace(/\/$/, "");
+  if (origin) return origin;
+  return `${req.protocol}://${req.get("host")}`;
+}
+
+export async function forgotPassword(req, res) {
+  try {
+    const { email } = req.body || {};
+    if (!email) {
+      res.status(400).json({ error: "Email is required" });
+      return;
+    }
+    const payload = await issuePasswordResetForEmail(email);
+    if (payload?.token && payload?.user?.email) {
+      const resetLink = `${getClientBaseUrl(req)}/reset-password?token=${encodeURIComponent(payload.token)}`;
+      await sendPasswordResetEmail(payload.user.email, resetLink);
+    }
+    res.json({ message: "If an account exists for this email, a password reset link has been sent." });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to process forgot password" });
+  }
+}
+
+export async function resetPassword(req, res) {
+  try {
+    const { token, password } = req.body || {};
+    if (!token || !password) {
+      res.status(400).json({ error: "Token and password are required" });
+      return;
+    }
+    const user = await resetPasswordWithToken(token, password);
+    if (!user) {
+      res.status(400).json({ error: "Invalid or expired reset token" });
+      return;
+    }
+    res.json({ message: "Password has been reset successfully." });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to reset password" });
   }
 }

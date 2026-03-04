@@ -6,6 +6,7 @@ import { MeetingSession } from "../models/meetingSession.js";
 
 const ITERATIONS = 120000;
 const OTP_TTL_MINUTES = 10;
+const RESET_PASSWORD_TTL_MINUTES = 30;
 const ENV_ADMIN_SUB = "env-admin";
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
@@ -195,6 +196,10 @@ function hashOtp(code) {
   return crypto.createHash("sha256").update(code).digest("hex");
 }
 
+function hashResetToken(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
 export async function issueOtpForUser(userId) {
   if (!userId) throw new Error("Missing user");
   const code = generateOtpCode();
@@ -218,4 +223,34 @@ export async function verifyOtpForUser(userId, code) {
   await user.save();
   const token = signToken({ sub: user.id, role: user.role }, process.env.JWT_SECRET);
   return { user: sanitizeUser(user), token };
+}
+
+export async function issuePasswordResetForEmail(email) {
+  if (!email) return null;
+  const user = await User.findOne({ email: String(email).toLowerCase() });
+  if (!user) return null;
+  const rawToken = crypto.randomBytes(32).toString("hex");
+  const tokenHash = hashResetToken(rawToken);
+  const expires = new Date(Date.now() + RESET_PASSWORD_TTL_MINUTES * 60 * 1000);
+  user.resetPasswordToken = tokenHash;
+  user.resetPasswordExpires = expires;
+  await user.save();
+  return { user: sanitizeUser(user), token: rawToken, expiresAt: expires };
+}
+
+export async function resetPasswordWithToken(token, password) {
+  const tokenInput = String(token || "").trim();
+  const passwordInput = String(password || "");
+  if (!tokenInput || !passwordInput) return null;
+  const hashedToken = hashResetToken(tokenInput);
+  const user = await User.findOne({
+    resetPasswordToken: hashedToken,
+    resetPasswordExpires: { $gt: new Date() },
+  });
+  if (!user) return null;
+  user.password = hashPassword(passwordInput);
+  user.resetPasswordToken = undefined;
+  user.resetPasswordExpires = undefined;
+  await user.save();
+  return sanitizeUser(user);
 }

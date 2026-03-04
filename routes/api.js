@@ -1,7 +1,7 @@
 import express from "express";
 import { createMeeting, fetchMeeting, fetchMeetings } from "../controllers/meetingController.js";
 import { createSoap, fetchSoap, fetchSoaps } from "../controllers/soapNoteController.js";
-import { signup, login, me, updateProfile, sendOtp, verifyOtp } from "../controllers/authController.js";
+import { signup, login, me, updateProfile, sendOtp, verifyOtp, forgotPassword, resetPassword } from "../controllers/authController.js";
 import {
   createDashboardMeeting,
   deleteNotesMeeting,
@@ -26,6 +26,8 @@ router.get("/auth/me", requireAuth, me);
 router.post("/auth/profile", requireAuth, updateProfile);
 router.post("/auth/send-otp", sendOtp);
 router.post("/auth/verify-otp", verifyOtp);
+router.post("/auth/forgot-password", forgotPassword);
+router.post("/auth/reset-password", resetPassword);
 
 router.post("/dashboard/meetings", requireAuth, createDashboardMeeting);
 router.get("/dashboard/meetings", requireAuth, listDashboardMeetings);
