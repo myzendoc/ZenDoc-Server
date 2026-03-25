@@ -4,9 +4,11 @@ import { createSoap, fetchSoap, fetchSoaps } from "../controllers/soapNoteContro
 import { signup, login, me, updateProfile, sendOtp, verifyOtp, forgotPassword, resetPassword } from "../controllers/authController.js";
 import {
   createDashboardMeeting,
+  createPrivateMeetingNote,
   deleteNotesMeeting,
   getDashboardMeeting,
   getMeetingNotes,
+  getPrivateMeetingNotes,
   getPublicMeeting,
   listDashboardMeetings,
   createMeetingNote,
@@ -34,6 +36,8 @@ router.get("/dashboard/meetings", requireAuth, listDashboardMeetings);
 router.get("/dashboard/meetings/:id", requireAuth, getDashboardMeeting);
 router.post("/dashboard/meetings/:id/notes", requireAuth, createMeetingNote);
 router.get("/dashboard/meetings/:id/notes", requireAuth, getMeetingNotes);
+router.post("/dashboard/meetings/:id/private-notes", requireAuth, createPrivateMeetingNote);
+router.get("/dashboard/meetings/:id/private-notes", requireAuth, getPrivateMeetingNotes);
 router.get("/notes/meetings", requireAuth, listNotesMeetings);
 router.get("/notes/meetings/:id", requireAuth, getNotesMeeting);
 router.patch("/notes/meetings/:id", requireAuth, renameNotesMeeting);

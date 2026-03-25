@@ -12,6 +12,7 @@ import {
   renameMeetingSession,
 } from "../services/meetingSessionService.js";
 import { createSoapNote, getSoapNotesByMeeting, getSoapNotesBySession } from "../services/soapNoteService.js";
+import { createPrivateNote, getPrivateNotesByMeeting, getPrivateNotesBySession } from "../services/privateNoteService.js";
 import { getTranscriptsByRoom } from "../services/transcriptService.js";
 
 function computeStatus(session, meeting) {
@@ -182,6 +183,9 @@ export async function getNotesMeeting(req, res) {
     const notes = session.fallbackMeeting
       ? await getSoapNotesByMeeting(session.meeting._id)
       : await getSoapNotesBySession(session._id);
+    const privateNotes = session.fallbackMeeting
+      ? await getPrivateNotesByMeeting(session.meeting._id, { createdBy: req.user?._id })
+      : await getPrivateNotesBySession(session._id, { createdBy: req.user?._id });
 
     const soapProcessing = !notes.length && transcripts.length > 0 && Boolean(session.endedAt || session?.meeting?.endedAt);
 
@@ -189,10 +193,87 @@ export async function getNotesMeeting(req, res) {
       meeting: serializeSessionRecord(session, req),
       transcripts,
       notes,
+      privateNotes,
       soapProcessing,
     });
   } catch {
     res.status(500).json({ error: "Failed to fetch meeting data" });
+  }
+}
+
+export async function createPrivateMeetingNote(req, res) {
+  try {
+    const content = String(req.body?.content || "").trim();
+    if (!content) {
+      res.status(400).json({ error: "Private note content is required" });
+      return;
+    }
+
+    const session = await getMeetingSessionWithContext(req.params.id);
+    if (session) {
+      if (!canAccessMeeting(session.meeting, req.user)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+      const note = await createPrivateNote({
+        meetingId: session.meeting._id,
+        meetingSessionId: session._id,
+        sessionIndex: session.sessionIndex,
+        roomId: session.meeting.roomId,
+        content,
+        createdBy: req.user?._id,
+      });
+      res.json({ note });
+      return;
+    }
+
+    const meeting = await getMeetingById(req.params.id);
+    if (!meeting) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    if (!canAccessMeeting(meeting, req.user)) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    const note = await createPrivateNote({
+      meetingId: meeting._id,
+      roomId: meeting.roomId,
+      content,
+      createdBy: req.user?._id,
+    });
+    res.json({ note });
+  } catch {
+    res.status(400).json({ error: "Failed to save private note" });
+  }
+}
+
+export async function getPrivateMeetingNotes(req, res) {
+  try {
+    const session = await getMeetingSessionWithContext(req.params.id);
+    if (session) {
+      if (!canAccessMeeting(session.meeting, req.user)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+      const notes = await getPrivateNotesBySession(session._id, { createdBy: req.user?._id });
+      res.json({ notes });
+      return;
+    }
+
+    const meeting = await getMeetingById(req.params.id);
+    if (!meeting) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    if (!canAccessMeeting(meeting, req.user)) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    const notes = await getPrivateNotesByMeeting(meeting._id, { createdBy: req.user?._id });
+    res.json({ notes });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch private notes" });
   }
 }
 

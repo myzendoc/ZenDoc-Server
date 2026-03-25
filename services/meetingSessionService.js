@@ -3,6 +3,7 @@ import { MeetingSession } from "../models/meetingSession.js";
 import { User } from "../models/user.js";
 import { Transcript } from "../models/transcript.js";
 import { SoapNote } from "../models/soapNote.js";
+import { PrivateNote } from "../models/privateNote.js";
 
 export async function startMeetingSession({ roomId, creatorPeerId, creatorSocketId }) {
   if (!roomId) return null;
@@ -122,6 +123,7 @@ export async function deleteMeetingSessionWithData(sessionId) {
   await Promise.all([
     Transcript.deleteMany({ meetingSessionId: session._id }),
     SoapNote.deleteMany({ meetingSessionId: session._id }),
+    PrivateNote.deleteMany({ meetingSessionId: session._id }),
     MeetingSession.deleteOne({ _id: session._id }),
   ]);
 
