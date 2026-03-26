@@ -11,7 +11,7 @@ import {
   listMeetingSessionsWithContext,
   renameMeetingSession,
 } from "../services/meetingSessionService.js";
-import { createSoapNote, getSoapNotesByMeeting, getSoapNotesBySession } from "../services/soapNoteService.js";
+import { createSoapNote, getSoapNote, getSoapNotesByMeeting, getSoapNotesBySession, updateSoapNoteSection } from "../services/soapNoteService.js";
 import { createPrivateNote, getPrivateNotesByMeeting, getPrivateNotesBySession } from "../services/privateNoteService.js";
 import { getTranscriptsByRoom } from "../services/transcriptService.js";
 
@@ -394,6 +394,57 @@ export async function getMeetingNotes(req, res) {
     res.json({ notes });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch notes" });
+  }
+}
+
+export async function updateMeetingNote(req, res) {
+  try {
+    const section = String(req.body?.section || "").trim().toLowerCase();
+    const content = String(req.body?.content || "").trim();
+    if (!section || !["subjective", "objective", "assessment", "plan"].includes(section)) {
+      res.status(400).json({ error: "Valid SOAP section is required" });
+      return;
+    }
+    if (!content) {
+      res.status(400).json({ error: "Section content is required" });
+      return;
+    }
+
+    const session = await getMeetingSessionWithContext(req.params.id);
+    if (session) {
+      if (!canAccessMeeting(session.meeting, req.user)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+      const existing = await getSoapNote(req.params.noteId);
+      if (!existing || String(existing.meetingSessionId || "") !== String(session._id)) {
+        res.status(404).json({ error: "Note not found" });
+        return;
+      }
+      const note = await updateSoapNoteSection(req.params.noteId, section, content);
+      res.json({ note });
+      return;
+    }
+
+    const meeting = await getMeetingById(req.params.id);
+    if (!meeting) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    if (!canAccessMeeting(meeting, req.user)) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+
+    const existing = await getSoapNote(req.params.noteId);
+    if (!existing || String(existing.meetingId || "") !== String(meeting._id)) {
+      res.status(404).json({ error: "Note not found" });
+      return;
+    }
+    const note = await updateSoapNoteSection(req.params.noteId, section, content);
+    res.json({ note });
+  } catch {
+    res.status(400).json({ error: "Failed to update note" });
   }
 }
 

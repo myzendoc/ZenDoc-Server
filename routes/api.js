@@ -12,6 +12,7 @@ import {
   getPublicMeeting,
   listDashboardMeetings,
   createMeetingNote,
+  updateMeetingNote,
   listNotesMeetings,
   getNotesMeeting,
   renameNotesMeeting,
@@ -36,6 +37,7 @@ router.get("/dashboard/meetings", requireAuth, listDashboardMeetings);
 router.get("/dashboard/meetings/:id", requireAuth, getDashboardMeeting);
 router.post("/dashboard/meetings/:id/notes", requireAuth, createMeetingNote);
 router.get("/dashboard/meetings/:id/notes", requireAuth, getMeetingNotes);
+router.patch("/dashboard/meetings/:id/notes/:noteId", requireAuth, updateMeetingNote);
 router.post("/dashboard/meetings/:id/private-notes", requireAuth, createPrivateMeetingNote);
 router.get("/dashboard/meetings/:id/private-notes", requireAuth, getPrivateMeetingNotes);
 router.get("/notes/meetings", requireAuth, listNotesMeetings);
