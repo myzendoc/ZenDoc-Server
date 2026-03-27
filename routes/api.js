@@ -1,7 +1,8 @@
 import express from "express";
+import passport, { isGoogleAuthEnabled } from "../config/passport.js";
 import { createMeeting, fetchMeeting, fetchMeetings } from "../controllers/meetingController.js";
 import { createSoap, fetchSoap, fetchSoaps } from "../controllers/soapNoteController.js";
-import { signup, login, me, updateProfile, sendOtp, verifyOtp, forgotPassword, resetPassword } from "../controllers/authController.js";
+import { signup, login, me, updateProfile, sendOtp, verifyOtp, forgotPassword, resetPassword, googleCallback, googleFailure } from "../controllers/authController.js";
 import {
   createDashboardMeeting,
   createPrivateMeetingNote,
@@ -25,6 +26,25 @@ const router = express.Router();
 
 router.post("/auth/signup", signup);
 router.post("/auth/login", login);
+router.get("/auth/google", (req, res, next) => {
+  if (!isGoogleAuthEnabled()) {
+    res.status(503).json({ error: "Google auth is not configured" });
+    return;
+  }
+  passport.authenticate("google", {
+    scope: ["profile", "email"],
+    session: false,
+    prompt: "select_account",
+  })(req, res, next);
+});
+router.get("/auth/google/callback", (req, res, next) => {
+  if (!isGoogleAuthEnabled()) {
+    res.status(503).json({ error: "Google auth is not configured" });
+    return;
+  }
+  passport.authenticate("google", { session: false, failureRedirect: "/api/auth/google/failure" })(req, res, next);
+}, googleCallback);
+router.get("/auth/google/failure", googleFailure);
 router.get("/auth/me", requireAuth, me);
 router.post("/auth/profile", requireAuth, updateProfile);
 router.post("/auth/send-otp", sendOtp);

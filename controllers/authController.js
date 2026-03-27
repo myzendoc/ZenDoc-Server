@@ -1,4 +1,5 @@
 import {
+  authenticateGoogleUser,
   authenticateUser,
   createUser,
   issueOtpForUser,
@@ -136,4 +137,26 @@ export async function resetPassword(req, res) {
   } catch (err) {
     res.status(400).json({ error: err.message || "Failed to reset password" });
   }
+}
+
+export async function googleCallback(req, res) {
+  const authPayload = req.user;
+  if (!authPayload?.token) {
+    res.redirect(`${getClientBaseUrl(req)}/login?error=${encodeURIComponent("Google authentication failed")}`);
+    return;
+  }
+  const redirectBase = getClientBaseUrl(req);
+  res.redirect(`${redirectBase}/auth/google/callback?token=${encodeURIComponent(authPayload.token)}`);
+}
+
+export function googleFailure(req, res) {
+  res.redirect(`${getClientBaseUrl(req)}/login?error=${encodeURIComponent("Google authentication failed")}`);
+}
+
+export async function verifyGoogleProfile(profile) {
+  const email = profile?.emails?.[0]?.value || "";
+  const googleId = profile?.id || "";
+  const firstName = profile?.name?.givenName || profile?.displayName || "User";
+  const lastName = profile?.name?.familyName || "";
+  return authenticateGoogleUser({ googleId, email, firstName, lastName });
 }

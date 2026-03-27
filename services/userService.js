@@ -105,8 +105,42 @@ export async function authenticateUser(email, password) {
   }
   const user = await User.findOne({ email: email.toLowerCase() });
   if (!user) throw new Error("Invalid credentials");
+  if (!user.password) throw new Error("Use Google sign-in for this account");
   const valid = verifyPassword(password, user.password);
   if (!valid) throw new Error("Invalid credentials");
+  const token = signToken({ sub: user.id, role: user.role }, process.env.JWT_SECRET);
+  return { user: sanitizeUser(user), token };
+}
+
+export async function authenticateGoogleUser({ googleId, email, firstName, lastName }) {
+  const normalizedEmail = String(email || "").toLowerCase().trim();
+  if (!googleId || !normalizedEmail) throw new Error("Missing Google profile");
+
+  let user = await User.findOne({ googleId });
+  if (!user) {
+    user = await User.findOne({ email: normalizedEmail });
+  }
+
+  if (user) {
+    if (!user.googleId) user.googleId = googleId;
+    if (!user.firstName && firstName) user.firstName = firstName;
+    if (!user.lastName && lastName) user.lastName = lastName;
+    user.authProvider = "google";
+    user.verified = true;
+    await user.save();
+  } else {
+    user = await User.create({
+      firstName: firstName || "User",
+      lastName: lastName || "",
+      email: normalizedEmail,
+      googleId,
+      authProvider: "google",
+      onboardingComplete: false,
+      verified: true,
+      role: "provider",
+    });
+  }
+
   const token = signToken({ sub: user.id, role: user.role }, process.env.JWT_SECRET);
   return { user: sanitizeUser(user), token };
 }

@@ -18,6 +18,7 @@ import { sessionManager } from "./services/sessionManager.js";
 import { getMeeting } from "./services/meetingService.js";
 import apiRouter from "./routes/api.js";
 import { verifyToken } from "./utils/jwt.js";
+import passport, { configurePassport } from "./config/passport.js";
 
 dotenv.config()
 
@@ -32,6 +33,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+configurePassport();
 
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
@@ -45,6 +47,7 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+app.use(passport.initialize());
 app.use("/api", apiRouter);
 app.use(express.static(path.join(__dirname, "dist")));
 
