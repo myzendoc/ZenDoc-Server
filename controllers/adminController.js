@@ -1,4 +1,5 @@
 import { listUsersWithMeetingCounts } from "../services/userService.js";
+import { listAuditLogs } from "../services/auditLogService.js";
 
 function toHourString(totalSeconds = 0) {
   const safe = Number.isFinite(totalSeconds) ? Math.max(0, Math.floor(totalSeconds)) : 0;
@@ -51,5 +52,15 @@ export async function getAdminDashboard(req, res) {
     });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch users" });
+  }
+}
+
+export async function getAdminAuditLogs(req, res) {
+  try {
+    const { page, limit, search, action, from, to } = req.query || {};
+    const result = await listAuditLogs({ page, limit, search, action, from, to });
+    res.json(result);
+  } catch {
+    res.status(500).json({ error: "Failed to fetch audit logs" });
   }
 }

@@ -18,7 +18,7 @@ import {
   getNotesMeeting,
   renameNotesMeeting,
 } from "../controllers/dashboardController.js";
-import { getAdminDashboard, listUsers } from "../controllers/adminController.js";
+import { getAdminAuditLogs, getAdminDashboard, listUsers } from "../controllers/adminController.js";
 import { requireAdmin, requireAuth } from "../middleware/auth.js";
 import { getAnalyticsSummary } from "../controllers/analyticsController.js";
 
@@ -69,6 +69,7 @@ router.get("/public/meetings/:roomId", getPublicMeeting);
 
 router.get("/admin/users", requireAuth, requireAdmin, listUsers);
 router.get("/admin/dashboard", requireAuth, requireAdmin, getAdminDashboard);
+router.get("/admin/audit-logs", requireAuth, requireAdmin, getAdminAuditLogs);
 router.get("/analytics/summary", requireAuth, getAnalyticsSummary);
 
 router.post("/meetings", createMeeting);

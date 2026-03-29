@@ -19,6 +19,9 @@ import { getMeeting } from "./services/meetingService.js";
 import apiRouter from "./routes/api.js";
 import { verifyToken } from "./utils/jwt.js";
 import passport, { configurePassport } from "./config/passport.js";
+import { auditHttpActivity } from "./middleware/audit.js";
+import { createAuditLog } from "./services/auditLogService.js";
+import { getIpFromSocket, parseBrowserFromUserAgent } from "./utils/audit.js";
 
 dotenv.config()
 
@@ -48,7 +51,7 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 app.use(passport.initialize());
-app.use("/api", apiRouter);
+app.use("/api", auditHttpActivity, apiRouter);
 app.use(express.static(path.join(__dirname, "dist")));
 
 app.get("*", (req, res) => {
@@ -150,6 +153,39 @@ function removeWaitingSocket(socketId) {
   return changedRoom;
 }
 
+function getSocketActor(socket, payload = {}) {
+  const tokenUserId = extractUserIdFromToken(payload?.authToken);
+  const payloadUserId = payload?.userId ? String(payload.userId) : "";
+  const actorUserId = tokenUserId || payloadUserId || null;
+  const actorRole = payload?.isAdmin ? "admin" : (actorUserId ? "provider" : "guest");
+  const userAgent = String(socket?.handshake?.headers?.["user-agent"] || "");
+  return {
+    actorUserId,
+    actorRole,
+    actorEmail: null,
+    actorName: payload?.username ? String(payload.username) : null,
+    ipAddress: getIpFromSocket(socket),
+    userAgent,
+    browser: parseBrowserFromUserAgent(userAgent),
+    method: "SOCKET",
+  };
+}
+
+function logSocketAudit(socket, { action, status = "success", payload = {}, resourceId = null, metadata = {} } = {}) {
+  const actor = getSocketActor(socket, payload);
+  createAuditLog({
+    ...actor,
+    action,
+    resourceType: "socket",
+    resourceId,
+    status,
+    path: action,
+    metadata,
+  }).catch((err) => {
+    console.error("audit socket log failed", err?.message || err);
+  });
+}
+
 io.on("connection", (socket) => {
   socket.data.waitingWatchRooms = new Set();
 
@@ -174,11 +210,25 @@ io.on("connection", (socket) => {
 
   socket.on("waiting:request", async ({ room, peerId, username, authToken, userId, isCreator } = {}, callback) => {
     if (!room || !peerId || !username) {
+      logSocketAudit(socket, {
+        action: "waiting:request",
+        status: "failure",
+        payload: { authToken, userId, username },
+        resourceId: room || null,
+        metadata: { reason: "missing_payload" },
+      });
       callback?.({ error: "Missing waiting room payload" });
       return;
     }
     const meeting = await getMeeting(room);
     if (!meeting) {
+      logSocketAudit(socket, {
+        action: "waiting:request",
+        status: "failure",
+        payload: { authToken, userId, username },
+        resourceId: room,
+        metadata: { reason: "invalid_room" },
+      });
       callback?.({ error: "Invalid room link" });
       return;
     }
@@ -205,6 +255,12 @@ io.on("connection", (socket) => {
         emitWaitingUpdate(room);
       }
       callback?.({ queued: true });
+      logSocketAudit(socket, {
+        action: "waiting:request",
+        payload: { authToken, userId, username },
+        resourceId: room,
+        metadata: { queued: true, peerId },
+      });
       return;
     }
     if (isRequesterCreator) {
@@ -227,14 +283,34 @@ io.on("connection", (socket) => {
     }
 
     callback?.({ queued: true });
+    logSocketAudit(socket, {
+      action: "waiting:request",
+      payload: { authToken, userId, username },
+      resourceId: room,
+      metadata: { queued: true, peerId },
+    });
   });
 
   socket.on("waiting:approve", ({ room, socketId } = {}, callback) => {
     if (!room || !socketId) {
+      logSocketAudit(socket, {
+        action: "waiting:approve",
+        status: "failure",
+        payload: {},
+        resourceId: room || null,
+        metadata: { reason: "missing_payload" },
+      });
       callback?.({ error: "Missing waiting approval payload" });
       return;
     }
     if (!canManageWaiting(socket, room)) {
+      logSocketAudit(socket, {
+        action: "waiting:approve",
+        status: "failure",
+        payload: {},
+        resourceId: room,
+        metadata: { reason: "forbidden" },
+      });
       callback?.({ error: "Not allowed" });
       return;
     }
@@ -242,6 +318,13 @@ io.on("connection", (socket) => {
     const list = waitingRooms.get(room) || [];
     const target = list.find((item) => item.socketId === socketId);
     if (!target) {
+      logSocketAudit(socket, {
+        action: "waiting:approve",
+        status: "failure",
+        payload: {},
+        resourceId: room,
+        metadata: { reason: "target_not_found" },
+      });
       callback?.({ error: "User not in waiting room" });
       return;
     }
@@ -259,15 +342,35 @@ io.on("connection", (socket) => {
       username: target.username,
     });
     emitWaitingUpdate(room);
+    logSocketAudit(socket, {
+      action: "waiting:approve",
+      payload: { username: target.username, userId: target.peerId },
+      resourceId: room,
+      metadata: { approvedSocketId: socketId, approvedPeerId: target.peerId },
+    });
     callback?.({ status: "ok" });
   });
 
   socket.on("waiting:reject", ({ room, socketId } = {}, callback) => {
     if (!room || !socketId) {
+      logSocketAudit(socket, {
+        action: "waiting:reject",
+        status: "failure",
+        payload: {},
+        resourceId: room || null,
+        metadata: { reason: "missing_payload" },
+      });
       callback?.({ error: "Missing waiting reject payload" });
       return;
     }
     if (!canManageWaiting(socket, room)) {
+      logSocketAudit(socket, {
+        action: "waiting:reject",
+        status: "failure",
+        payload: {},
+        resourceId: room,
+        metadata: { reason: "forbidden" },
+      });
       callback?.({ error: "Not allowed" });
       return;
     }
@@ -275,6 +378,13 @@ io.on("connection", (socket) => {
     const list = waitingRooms.get(room) || [];
     const target = list.find((item) => item.socketId === socketId);
     if (!target) {
+      logSocketAudit(socket, {
+        action: "waiting:reject",
+        status: "failure",
+        payload: {},
+        resourceId: room,
+        metadata: { reason: "target_not_found" },
+      });
       callback?.({ error: "User not in waiting room" });
       return;
     }
@@ -291,6 +401,12 @@ io.on("connection", (socket) => {
       message: "Host denied your request",
     });
     emitWaitingUpdate(room);
+    logSocketAudit(socket, {
+      action: "waiting:reject",
+      payload: { username: target.username, userId: target.peerId },
+      resourceId: room,
+      metadata: { rejectedSocketId: socketId, rejectedPeerId: target.peerId },
+    });
     callback?.({ status: "ok" });
   });
 
@@ -311,10 +427,24 @@ io.on("connection", (socket) => {
   socket.on("stopTranscription", async ({ room, peerId }, callback) => {
     const roomObj = rooms.get(room);
     if (!roomObj) {
+      logSocketAudit(socket, {
+        action: "stopTranscription",
+        status: "failure",
+        payload: {},
+        resourceId: room || null,
+        metadata: { reason: "room_not_found", peerId },
+      });
       callback?.({ error: "Room not found" });
       return;
     }
     if (roomObj?.creatorPeerId !== peerId) {
+      logSocketAudit(socket, {
+        action: "stopTranscription",
+        status: "failure",
+        payload: {},
+        resourceId: room,
+        metadata: { reason: "not_creator", peerId },
+      });
       callback?.({ error: "Only the room creator can stop transcription" });
       return;
     }
@@ -328,8 +458,21 @@ io.on("connection", (socket) => {
         io.to(`${room}-creator`).emit("transcriptionStopped", result);
       }
       callback?.({ status: "ok", soaps });
+      logSocketAudit(socket, {
+        action: "stopTranscription",
+        payload: {},
+        resourceId: room,
+        metadata: { peerId, soapsGenerated: Boolean(soaps) },
+      });
     } catch (err) {
       console.error("stopTranscription error", err);
+      logSocketAudit(socket, {
+        action: "stopTranscription",
+        status: "failure",
+        payload: {},
+        resourceId: room,
+        metadata: { reason: "exception", peerId },
+      });
       callback?.({ error: "Failed to stop transcription" });
     }
   });
