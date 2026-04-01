@@ -2,6 +2,9 @@ import { getRoomTranscript } from "./transcriptService.js";
 import { generateSoaps } from "./soapsService.js";
 import { createSoapNote } from "./soapNoteService.js";
 import { endMeetingSession, getLatestMeetingSessionForRoom, startMeetingSession } from "./meetingSessionService.js";
+import { getMeeting, getMeetingById } from "./meetingService.js";
+import { getUserById } from "./userService.js";
+import { sendSessionEndedEmail, sendSoapReadyEmail } from "../utils/mailer.js";
 
 class SessionManager {
   constructor() {
@@ -142,6 +145,40 @@ class SessionManager {
     };
   }
 
+  async resolveProviderEmail(roomId, room = null) {
+    const roomState = room || this.rooms.get(roomId) || {};
+    let createdBy = roomState?.createdBy ? String(roomState.createdBy) : "";
+
+    if (!createdBy && roomState?.meetingId) {
+      const meetingById = await getMeetingById(String(roomState.meetingId));
+      if (meetingById?.createdBy) createdBy = String(meetingById.createdBy);
+    }
+
+    if (!createdBy && roomId) {
+      const meetingByRoom = await getMeeting(roomId);
+      if (meetingByRoom?.createdBy) createdBy = String(meetingByRoom.createdBy);
+    }
+
+    if (!createdBy) return "";
+    const provider = await getUserById(createdBy);
+    return String(provider?.email || "").trim().toLowerCase();
+  }
+
+  async sendSessionNotifications(roomId, result, room) {
+    try {
+      const email = await this.resolveProviderEmail(roomId, room);
+      if (!email) return;
+
+      const jobs = [sendSessionEndedEmail({ email, roomId })];
+      if (result?.soaps) {
+        jobs.push(sendSoapReadyEmail({ email, roomId }));
+      }
+      await Promise.allSettled(jobs);
+    } catch (err) {
+      console.error("session notification email failed", err?.message || err);
+    }
+  }
+
   async endSession(roomId) {
     if (!roomId) return null;
     const room = this.ensureRoom(roomId);
@@ -170,6 +207,7 @@ class SessionManager {
         sessionIndex: room.sessionIndex,
         endedAt: new Date(),
       });
+      await this.sendSessionNotifications(roomId, result, room);
       this.rooms.delete(roomId);
       return result;
     })();

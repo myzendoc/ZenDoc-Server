@@ -39,9 +39,6 @@ Add relevant lifestyle factors such as smoking, alcohol use, travel, exposure to
 
 
 
-Each point should appear on a new line starting with an en dash (–) for readability.
-
-
 
 Objective
 
@@ -56,10 +53,6 @@ Include vital signs, physical exam findings, laboratory results, imaging, and ot
 
 
 If information is not provided in the transcript, clearly note that it was not documented.
-
-
-
-Use clear bullet points starting with an en dash (–).
 
 
 
@@ -130,9 +123,6 @@ Writing style
 
 Clear, clinical, and concise.
 
-
-
-Each point should be on a separate line beginning with an en dash (–).
 
 
 

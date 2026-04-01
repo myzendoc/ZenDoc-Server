@@ -22,6 +22,8 @@ import passport, { configurePassport } from "./config/passport.js";
 import { auditHttpActivity } from "./middleware/audit.js";
 import { createAuditLog } from "./services/auditLogService.js";
 import { getIpFromSocket, parseBrowserFromUserAgent } from "./utils/audit.js";
+import { getUserById } from "./services/userService.js";
+import { sendWaitingRoomAlertEmail } from "./utils/mailer.js";
 
 dotenv.config()
 
@@ -153,6 +155,14 @@ function removeWaitingSocket(socketId) {
   return changedRoom;
 }
 
+async function getProviderEmailForRoom(roomId) {
+  if (!roomId) return "";
+  const meeting = await getMeeting(roomId);
+  if (!meeting?.createdBy) return "";
+  const provider = await getUserById(String(meeting.createdBy));
+  return String(provider?.email || "").trim().toLowerCase();
+}
+
 function getSocketActor(socket, payload = {}) {
   const tokenUserId = extractUserIdFromToken(payload?.authToken);
   const payloadUserId = payload?.userId ? String(payload.userId) : "";
@@ -255,6 +265,9 @@ io.on("connection", (socket) => {
         emitWaitingUpdate(room);
       }
       callback?.({ queued: true });
+      getProviderEmailForRoom(room)
+        .then((email) => sendWaitingRoomAlertEmail({ email, requesterName: username, roomId: room }))
+        .catch((err) => console.error("waiting room email failed", err?.message || err));
       logSocketAudit(socket, {
         action: "waiting:request",
         payload: { authToken, userId, username },
@@ -283,6 +296,9 @@ io.on("connection", (socket) => {
     }
 
     callback?.({ queued: true });
+    getProviderEmailForRoom(room)
+      .then((email) => sendWaitingRoomAlertEmail({ email, requesterName: username, roomId: room }))
+      .catch((err) => console.error("waiting room email failed", err?.message || err));
     logSocketAudit(socket, {
       action: "waiting:request",
       payload: { authToken, userId, username },
