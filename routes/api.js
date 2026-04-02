@@ -21,6 +21,12 @@ import {
 import { getAdminAuditLogs, getAdminDashboard, listUsers } from "../controllers/adminController.js";
 import { requireAdmin, requireAuth } from "../middleware/auth.js";
 import { getAnalyticsSummary } from "../controllers/analyticsController.js";
+import {
+  createCheckoutSession,
+  createPortalSession,
+  getBillingStatus,
+  listBillingPlans,
+} from "../controllers/billingController.js";
 
 const router = express.Router();
 
@@ -51,6 +57,10 @@ router.post("/auth/send-otp", sendOtp);
 router.post("/auth/verify-otp", verifyOtp);
 router.post("/auth/forgot-password", forgotPassword);
 router.post("/auth/reset-password", resetPassword);
+router.get("/billing/plans", listBillingPlans);
+router.post("/billing/checkout-session", requireAuth, createCheckoutSession);
+router.get("/billing/status", requireAuth, getBillingStatus);
+router.post("/billing/portal-session", requireAuth, createPortalSession);
 
 router.post("/dashboard/meetings", requireAuth, createDashboardMeeting);
 router.get("/dashboard/meetings", requireAuth, listDashboardMeetings);

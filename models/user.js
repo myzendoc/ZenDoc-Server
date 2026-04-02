@@ -17,6 +17,13 @@ const userSchema = new mongoose.Schema(
     otpExpires: { type: Date },
     resetPasswordToken: { type: String },
     resetPasswordExpires: { type: Date },
+    stripeCustomerId: { type: String, index: true, sparse: true },
+    stripeSubscriptionId: { type: String, index: true, sparse: true },
+    stripePriceId: { type: String },
+    subscriptionPlanKey: { type: String, default: "free", index: true },
+    subscriptionStatus: { type: String, default: "inactive", index: true },
+    subscriptionCurrentPeriodEnd: { type: Date },
+    subscriptionCancelAtPeriodEnd: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

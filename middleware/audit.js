@@ -16,6 +16,7 @@ function getResourceId(req) {
 
 function shouldSkip(pathname = "") {
   if (!pathname.startsWith("/api/")) return true;
+  if (pathname === "/api/billing/webhook") return true;
   return false;
 }
 
@@ -32,7 +33,13 @@ export function auditHttpActivity(req, res, next) {
     const userAgent = String(req.headers?.["user-agent"] || "");
     const status = res.statusCode >= 400 ? "failure" : "success";
     const actor = getActorFromRequest(req);
-    const bodyKeys = req.body && typeof req.body === "object" ? Object.keys(req.body).slice(0, 20) : [];
+    const bodyKeys =
+      req.body &&
+      typeof req.body === "object" &&
+      !Buffer.isBuffer(req.body) &&
+      !Array.isArray(req.body)
+        ? Object.keys(req.body).slice(0, 20)
+        : [];
     createAuditLog({
       ...actor,
       action: `${req.method} ${pathname.replace(/^\/api/, "") || "/"}`,

@@ -24,6 +24,7 @@ import { createAuditLog } from "./services/auditLogService.js";
 import { getIpFromSocket, parseBrowserFromUserAgent } from "./utils/audit.js";
 import { getUserById } from "./services/userService.js";
 import { sendWaitingRoomAlertEmail } from "./utils/mailer.js";
+import { stripeWebhook } from "./controllers/billingController.js";
 
 dotenv.config()
 
@@ -51,13 +52,33 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
+app.use((req, res, next) => {
+  if (String(req.originalUrl || "").startsWith("/api/billing/webhook")) {
+    next();
+    return;
+  }
+  express.json()(req, res, next);
+});
+app.post("/api/billing/webhook", express.raw({ type: "*/*" }), stripeWebhook);
 app.use(passport.initialize());
 app.use("/api", auditHttpActivity, apiRouter);
 app.use(express.static(path.join(__dirname, "dist")));
 
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "dist", "index.html"));
+});
+
+app.use((err, req, res, next) => {
+  console.error("express error", {
+    path: req?.originalUrl || req?.url,
+    method: req?.method,
+    message: err?.message || err,
+  });
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+  res.status(err?.status || 500).json({ error: err?.message || "Internal server error" });
 });
 
 const server = createServer(app);
