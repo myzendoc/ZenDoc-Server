@@ -25,6 +25,7 @@ import { getIpFromSocket, parseBrowserFromUserAgent } from "./utils/audit.js";
 import { getUserById } from "./services/userService.js";
 import { sendWaitingRoomAlertEmail } from "./utils/mailer.js";
 import { stripeWebhook } from "./controllers/billingController.js";
+import { getRoomEntitlements, isFreeSessionLimitExceeded } from "./services/entitlementService.js";
 
 dotenv.config()
 
@@ -676,12 +677,15 @@ async function addUserCall(user, socket) {
   let roomObj = rooms.get(user?.room);
   let isCreator = false;
   const creatorJoin = isMeetingCreatorJoin(meeting, user);
+  const entitlements = await getRoomEntitlements(user?.room);
 
   if (!roomObj) {
     roomObj = {
       producers: [],
       creatorPeerId: creatorJoin ? user?.peerId : null,
-      creatorSocketId: creatorJoin ? socket.id : null
+      creatorSocketId: creatorJoin ? socket.id : null,
+      screenShareAllowed: entitlements.screenShareAllowed,
+      transcriptRecordingEnabled: true,
     };
     rooms.set(user?.room, roomObj);
     isCreator = creatorJoin;
@@ -703,6 +707,14 @@ async function addUserCall(user, socket) {
     isCreator = true;
   }
 
+  const session = sessionManager.getSessionContext(user?.room);
+  roomObj = {
+    ...rooms.get(user?.room),
+    screenShareAllowed: entitlements.screenShareAllowed,
+    transcriptRecordingEnabled: !isFreeSessionLimitExceeded(entitlements, session?.sessionIndex),
+  };
+  rooms.set(user?.room, roomObj);
+
   Users.set(socket.id, { ...user });
   socket.join(user?.room);
   if (isCreator) {
@@ -710,7 +722,11 @@ async function addUserCall(user, socket) {
   }
   const filteredProducers = rooms.get(user?.room)?.producers;
   socket.emit("currentProducers", filteredProducers);
-  return { isCreator };
+  return {
+    isCreator,
+    screenShareAllowed: roomObj?.screenShareAllowed !== false,
+    transcriptRecordingEnabled: roomObj?.transcriptRecordingEnabled !== false,
+  };
 }
 
 async function getMinCPUUsageRouter(routers) {
@@ -788,6 +804,12 @@ async function connectTransport(params, id, callback) {
 async function produce(data, socket, callback) {
   try {
     const { kind, rtpParameters, id, room } = data;
+    const isScreenShare = data?.appData?.type === "screen";
+    const roomObj = rooms.get(room);
+    if (isScreenShare && roomObj?.screenShareAllowed === false) {
+      callback?.({ error: "Screen sharing is available on Premium plan only." });
+      return;
+    }
     const ProducerTransportObj = producerTransports.get(id);
     const ProducerTransport = ProducerTransportObj?.transport;
 
@@ -803,7 +825,7 @@ async function produce(data, socket, callback) {
         peerId: id,
         room: room,
         kind: kind,
-        screenShare: data?.appData?.type === "screen",
+        screenShare: isScreenShare,
       });
     }
 
@@ -811,20 +833,21 @@ async function produce(data, socket, callback) {
     socket?.broadcast?.to(room)?.emit("newProducer", {
       producerId: Producer.id,
       peerId: id,
-      screenShare: data?.appData?.type === "screen",
+      screenShare: isScreenShare,
     });
 
-    if (kind === "audio") {
-     createVoiceRecognizer(Producer, producerRouters?.[ProducerTransportObj?.router]?.router, room, id);
+    if (kind === "audio" && roomObj?.transcriptRecordingEnabled !== false) {
+      createVoiceRecognizer(Producer, producerRouters?.[ProducerTransportObj?.router]?.router, room, id);
     }
 
     callback({
       producerId: Producer.id,
       kind: kind,
-      screenShare: data?.appData?.type === "screen",
+      screenShare: isScreenShare,
     });
   } catch (err) {
     console.log(err);
+    callback?.({ error: "Failed to publish media" });
   }
 }
 
@@ -909,15 +932,18 @@ async function produce(data, socket, callback) {
           io.to(`${roomId}-creator`).emit('transcript',{msg, peerId})
           if (msg?.isFinal) {
             const session = sessionManager.getSessionContext(roomId);
-            saveFinalTranscript({
-              roomId,
-              peerId,
-              text: msg?.text,
-              sessionIndex: session?.sessionIndex,
-              meetingSessionId: session?.sessionId,
-            }).catch((err) =>
-              console.error("Transcript save error", err)
-            );
+            const roomObj = rooms.get(roomId);
+            if (roomObj?.transcriptRecordingEnabled !== false) {
+              saveFinalTranscript({
+                roomId,
+                peerId,
+                text: msg?.text,
+                sessionIndex: session?.sessionIndex,
+                meetingSessionId: session?.sessionId,
+              }).catch((err) =>
+                console.error("Transcript save error", err)
+              );
+            }
           }
 
         } catch (e) {

@@ -41,7 +41,7 @@ export const config ={
                 {
                     protocol:"udp",
                     ip:'0.0.0.0',
-                    announcedAddress:'192.168.1.38',
+                    announcedAddress:'192.168.1.41',
                     portRange:
 					{
 						min : 40000,
@@ -51,7 +51,7 @@ export const config ={
                 {
                     protocol:"tcp",
                     ip:'0.0.0.0',
-                    announcedAddress:'192.168.1.38',
+                    announcedAddress:'192.168.1.41',
                     portRange:
 					{
 						min : 40000,
@@ -69,7 +69,7 @@ export const config ={
                 {
                     protocol:"udp",
                     ip:'0.0.0.0',
-                    announcedAddress:'192.168.1.38',
+                    announcedAddress:'192.168.1.41',
                     portRange:
 					{
 						min : 40000,
@@ -81,7 +81,7 @@ export const config ={
       listenInfo: {
         protocol: "udp",
         ip: "0.0.0.0",
-        announcedAddress: '192.168.1.38',
+        announcedAddress: '192.168.1.41',
         portRange: {
           min: 30000,
           max: 39999,

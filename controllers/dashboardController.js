@@ -14,6 +14,7 @@ import {
 import { createSoapNote, getSoapNote, getSoapNotesByMeeting, getSoapNotesBySession, updateSoapNoteSection } from "../services/soapNoteService.js";
 import { createPrivateNote, getPrivateNotesByMeeting, getPrivateNotesBySession } from "../services/privateNoteService.js";
 import { getTranscriptsByRoom } from "../services/transcriptService.js";
+import { FREE_SOAP_TRANSCRIPT_LIMIT, getUserEntitlements, isFreeSessionLimitExceeded } from "../services/entitlementService.js";
 
 function computeStatus(session, meeting) {
   const now = new Date();
@@ -71,6 +72,21 @@ function canAccessMeeting(meeting, user) {
   if (user.role === "admin") return true;
   if (meeting.createdBy && String(meeting.createdBy) === String(user._id)) return true;
   return false;
+}
+
+async function getPlanLimitInfoForSession(session) {
+  const creatorId = session?.meeting?.createdBy ? String(session.meeting.createdBy) : "";
+  if (!creatorId) {
+    return { planLimitExceeded: false, planLimitMessage: "" };
+  }
+  const entitlements = await getUserEntitlements(creatorId);
+  const planLimitExceeded = isFreeSessionLimitExceeded(entitlements, session?.sessionIndex);
+  return {
+    planLimitExceeded,
+    planLimitMessage: planLimitExceeded
+      ? `Maximum SOAP notes limit exceeded (${FREE_SOAP_TRANSCRIPT_LIMIT}). Upgrade to premium plan for more.`
+      : "",
+  };
 }
 
 async function resolveSessionByParam(id) {
@@ -173,6 +189,8 @@ export async function getNotesMeeting(req, res) {
       return;
     }
 
+    const planLimit = await getPlanLimitInfoForSession(session);
+
     const transcripts = session.fallbackMeeting
       ? await getTranscriptsByRoom(session.meeting.roomId)
       : await getTranscriptsByRoom(session.meeting.roomId, {
@@ -187,14 +205,22 @@ export async function getNotesMeeting(req, res) {
       ? await getPrivateNotesByMeeting(session.meeting._id, { createdBy: req.user?._id })
       : await getPrivateNotesBySession(session._id, { createdBy: req.user?._id });
 
-    const soapProcessing = !notes.length && transcripts.length > 0 && Boolean(session.endedAt || session?.meeting?.endedAt);
+    const limitedTranscripts = planLimit.planLimitExceeded ? [] : transcripts;
+    const limitedNotes = planLimit.planLimitExceeded ? [] : notes;
+    const soapProcessing =
+      !planLimit.planLimitExceeded &&
+      !limitedNotes.length &&
+      limitedTranscripts.length > 0 &&
+      Boolean(session.endedAt || session?.meeting?.endedAt);
 
     res.json({
       meeting: serializeSessionRecord(session, req),
-      transcripts,
-      notes,
+      transcripts: limitedTranscripts,
+      notes: limitedNotes,
       privateNotes,
       soapProcessing,
+      planLimitExceeded: planLimit.planLimitExceeded,
+      planLimitMessage: planLimit.planLimitMessage,
     });
   } catch {
     res.status(500).json({ error: "Failed to fetch meeting data" });

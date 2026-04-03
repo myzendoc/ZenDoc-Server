@@ -5,6 +5,7 @@ import { endMeetingSession, getLatestMeetingSessionForRoom, startMeetingSession 
 import { getMeeting, getMeetingById } from "./meetingService.js";
 import { getUserById } from "./userService.js";
 import { sendSessionEndedEmail, sendSoapReadyEmail } from "../utils/mailer.js";
+import { getUserEntitlements, isFreeSessionLimitExceeded } from "./entitlementService.js";
 
 class SessionManager {
   constructor() {
@@ -106,6 +107,19 @@ class SessionManager {
 
   async finalizeRoom(roomId) {
     const room = this.ensureRoom(roomId);
+    const entitlements = await getUserEntitlements(room?.createdBy);
+    const planLimitExceeded = isFreeSessionLimitExceeded(entitlements, room?.sessionIndex);
+
+    if (planLimitExceeded) {
+      return {
+        transcript: "",
+        soaps: null,
+        sessionIndex: room.sessionIndex,
+        sessionId: room.sessionId,
+        planLimitExceeded: true,
+      };
+    }
+
     if (room.sessionIndex === undefined || room.sessionIndex === null) {
       return {
         transcript: "",
