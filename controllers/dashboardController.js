@@ -426,13 +426,9 @@ export async function getMeetingNotes(req, res) {
 export async function updateMeetingNote(req, res) {
   try {
     const section = String(req.body?.section || "").trim().toLowerCase();
-    const content = String(req.body?.content || "").trim();
+    const content = String(req.body?.content ?? "");
     if (!section || !["subjective", "objective", "assessment", "plan"].includes(section)) {
       res.status(400).json({ error: "Valid SOAP section is required" });
-      return;
-    }
-    if (!content) {
-      res.status(400).json({ error: "Section content is required" });
       return;
     }
 

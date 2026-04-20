@@ -1,10 +1,10 @@
 import { listMeetingSessionsWithContext } from "../services/meetingSessionService.js";
-import { getParticipantsByRooms } from "../services/transcriptService.js";
+import { getParticipantCountsByRoomSession } from "../services/transcriptService.js";
 
 function monthKey(date) {
   const d = new Date(date);
   if (Number.isNaN(d.getTime())) return null;
-  return `${d.getFullYear()}-${d.getMonth() + 1}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function monthLabel(key) {
@@ -19,13 +19,17 @@ export async function getAnalyticsSummary(req, res) {
     const includeAll = req.user?.role === "admin";
     const sessions = await listMeetingSessionsWithContext(req.user?._id, includeAll);
     const now = new Date();
-    const currentMonthKey = `${now.getFullYear()}-${now.getMonth() + 1}`;
+    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
     let totalSessions = 0;
     let totalMinutes = 0;
     let thisMonthSessions = 0;
     const monthCounts = new Map();
     const monthMinutes = new Map();
+    const monthParticipants = new Map();
+
+    const roomIds = [...new Set(sessions.map((m) => m.roomId).filter(Boolean))];
+    const participantCountsBySession = await getParticipantCountsByRoomSession(roomIds);
 
     sessions.forEach((m) => {
       totalSessions += 1;
@@ -33,11 +37,13 @@ export async function getAnalyticsSummary(req, res) {
       const end = m.endedAt || m.startedAt || m.createdAt;
       const durationMs = start && end ? Math.max(new Date(end) - new Date(start), 0) : 0;
       const durationMin = durationMs / 60000;
+      const sessionParticipants = participantCountsBySession[`${m.roomId}:${m.sessionIndex ?? 0}`] || 0;
       totalMinutes += durationMin;
       const key = monthKey(start || end);
       if (key) {
         monthCounts.set(key, (monthCounts.get(key) || 0) + 1);
         monthMinutes.set(key, (monthMinutes.get(key) || 0) + durationMin);
+        monthParticipants.set(key, (monthParticipants.get(key) || 0) + sessionParticipants);
         if (key === currentMonthKey) thisMonthSessions += 1;
       }
     });
@@ -64,8 +70,30 @@ export async function getAnalyticsSummary(req, res) {
       }
     });
 
-    const roomIds = sessions.map((m) => m.roomId).filter(Boolean);
-    const participants = await getParticipantsByRooms(roomIds);
+    const participants = Object.values(participantCountsBySession).reduce((sum, value) => sum + value, 0);
+
+    if (!monthCounts.has(currentMonthKey)) {
+      monthCounts.set(currentMonthKey, 0);
+      monthMinutes.set(currentMonthKey, 0);
+      monthParticipants.set(currentMonthKey, 0);
+    }
+
+    const months = Array.from(monthCounts.keys())
+      .sort((a, b) => b.localeCompare(a))
+      .map((key) => {
+        const sessionsInMonth = monthCounts.get(key) || 0;
+        const minutesInMonth = monthMinutes.get(key) || 0;
+        const participantsInMonth = monthParticipants.get(key) || 0;
+
+        return {
+          key,
+          label: monthLabel(key),
+          sessions: sessionsInMonth,
+          minutes: Math.round(minutesInMonth),
+          averageSessionTime: sessionsInMonth ? Math.round(minutesInMonth / sessionsInMonth) : 0,
+          participants: participantsInMonth,
+        };
+      });
 
     res.json({
       totals: {
@@ -82,6 +110,8 @@ export async function getAnalyticsSummary(req, res) {
         totalSessions,
         totalMinutes: Math.round(totalMinutes),
       },
+      currentMonthKey,
+      months,
     });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch analytics" });

@@ -38,3 +38,21 @@ export async function getParticipantsByRooms(roomIds = []) {
   });
   return uniquePeers.size;
 }
+
+export async function getParticipantCountsByRoomSession(roomIds = []) {
+  if (!roomIds.length) return {};
+  const docs = await Transcript.find({ roomId: { $in: roomIds } }, { peerId: 1, roomId: 1, sessionIndex: 1 }).lean();
+  const uniquePeers = new Set();
+  const counts = {};
+
+  docs.forEach((d) => {
+    if (!d?.peerId || !d?.roomId) return;
+    const sessionKey = `${d.roomId}:${d.sessionIndex ?? 0}`;
+    const participantKey = `${sessionKey}:${d.peerId}`;
+    if (uniquePeers.has(participantKey)) return;
+    uniquePeers.add(participantKey);
+    counts[sessionKey] = (counts[sessionKey] || 0) + 1;
+  });
+
+  return counts;
+}
