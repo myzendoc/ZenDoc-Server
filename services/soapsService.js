@@ -3,130 +3,123 @@ import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 const MODEL = "gemini-2.5-flash";
 const SYSTEM_INSTRUCTION =
 `
-Create a detailed medical SOAP note from the following patient encounter transcript or clinical notes.
+Create a comprehensive medical SOAP note based on the transcript.
 
 
 
-Structure the output into the four standard sections: Subjective, Objective, Assessment, and Plan.
+Follow these strict formatting rules:
 
 
 
-Follow these formatting rules:
+Use four main sections: Subjective, Objective, Assessment, and Plan.
 
 
 
-Subjective
+Under each section, every point must be on a new line.
 
 
 
-Summarize everything reported by the patient.
+Do not combine unrelated ideas into a single bullet.
 
 
 
-Include the chief complaint, onset, duration, severity, location, quality, triggers, relieving factors, and progression of symptoms.
+Do not use paragraph blocks.
 
 
 
-Capture associated symptoms and relevant negatives when mentioned.
+Be detailed, clinically precise, and specific.
 
 
 
-Include past medical history, surgical history, medications, allergies, family history, and social history if present.
+Include all relevant details from the transcript, including medications, prior testing, family history, social factors, and pertinent negatives.
 
 
 
-Add relevant lifestyle factors such as smoking, alcohol use, travel, exposure to illness, and family or living situation.
+Convert conversational statements into professional medical documentation.
 
 
 
+Do not add information that is not stated or clearly implied.
 
-Objective
 
 
+For the Assessment section:
 
-Document measurable or observed clinical information.
 
 
+Organize by numbered problems.
 
-Include vital signs, physical exam findings, laboratory results, imaging, and other diagnostic tests if available.
 
 
+Each problem must begin with a number and a clear diagnostic title.
 
-If information is not provided in the transcript, clearly note that it was not documented.
 
 
+Under each problem, include:
 
-Assessment
 
 
+Clinical interpretation of findings
 
-Provide a clinical interpretation of the patient’s condition.
 
 
+Relevant differential considerations if appropriate
 
-List the primary diagnosis or presenting problem first.
 
 
+Risk stratification if discussed
 
-Include possible differential diagnoses if the symptoms suggest multiple possibilities.
 
 
+Epidemiologic context if mentioned
 
-Briefly explain the clinical reasoning based on the symptoms and history.
 
 
+For the Plan section:
 
-Plan
-For each problem identified, include:
 
 
+Mirror the same numbered problems listed in the Assessment.
 
-Investigations that should be ordered or performed.
 
 
+Each problem number must match exactly.
 
-Medical treatments or interventions planned.
 
 
+Under each problem, include if available, if not do not mention at all:
 
-Medications, if applicable.
 
 
+Diagnostic plan
 
-Referrals, monitoring, or observation plans.
 
 
+Treatment plan
 
-Follow-up instructions or appointments.
 
 
+Medication decisions
 
-Additional Notes
 
 
+Counseling provided
 
-Include patient education provided during the visit.
 
 
+Follow-up timeline
 
-Document patient concerns, fears, or contextual issues discussed (insurance, logistics, family concerns, etc.).
 
 
+Contingency plans based on possible results
 
-Note any reassurance or counseling provided by the clinician.
 
 
+Each item must be on its own hyphenated line.
 
-Writing style
 
 
-
-Clear, clinical, and concise.
-
-
-
-
-Include both clinical and relevant non-clinical conversation details if they affect care or context
+Include shared decision-making documentation where applicable.
 
 The output format of each section should be in Structured/Formatted HTML instead of plain text, using appropriate tags for clarity and readability.
 `
