@@ -18,13 +18,19 @@ function toDashboardUser(user) {
   const firstIsEmailLocal = first && emailLocal && first.toLowerCase() === emailLocal;
   const preferredFromNames = display || last || (firstIsEmailLocal ? "" : first);
   const displayName = preferredFromNames || emailLocal || "User";
+  const sessions = user.meetingCount || 0;
+  const totalSeconds = user.totalMeetingSeconds || 0;
+  const avgSeconds = sessions > 0 ? Math.floor(totalSeconds / sessions) : 0;
   return {
     id: user._id,
     name: displayName,
     email: user.email,
-    totalMeetingHours: toHourString(user.totalMeetingSeconds || 0),
-    totalMeetingSeconds: user.totalMeetingSeconds || 0,
-    meetingCount: user.meetingCount || 0,
+    totalMeetingHours: toHourString(totalSeconds),
+    totalMeetingSeconds: totalSeconds,
+    meetingCount: sessions,
+    avgSessionTime: toHourString(avgSeconds),
+    avgSessionSeconds: avgSeconds,
+    lastActiveAt: user.lastMeetingAt || null,
   };
 }
 
