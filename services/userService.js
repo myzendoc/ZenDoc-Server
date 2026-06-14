@@ -43,6 +43,11 @@ export function sanitizeUser(user) {
   delete obj.password;
   delete obj.otpCode;
   delete obj.otpExpires;
+  delete obj.emailChangeOtp;
+  delete obj.emailChangeOtpExpires;
+  delete obj.resetPasswordToken;
+  delete obj.resetPasswordExpires;
+  obj.hasPassword = Boolean(user.password);
   return obj;
 }
 
@@ -164,6 +169,13 @@ export async function updateUserProfile(userId, payload = {}) {
   if (payload.lastName !== undefined) updates.lastName = payload.lastName;
   if (payload.displayName !== undefined) updates.displayName = payload.displayName;
   if (payload.meetingUrl !== undefined) updates.meetingUrl = payload.meetingUrl;
+  if (payload.npiNumber !== undefined) updates.npiNumber = String(payload.npiNumber).trim();
+  if (payload.primarySpecialty !== undefined) updates.primarySpecialty = String(payload.primarySpecialty).trim();
+  if (payload.statesLicensed !== undefined) {
+    updates.statesLicensed = Array.isArray(payload.statesLicensed)
+      ? payload.statesLicensed.map((s) => String(s).trim()).filter(Boolean)
+      : [];
+  }
   if (Object.keys(updates).length === 0) return getUserById(userId);
   if (updates.firstName || updates.displayName || updates.meetingUrl) updates.onboardingComplete = true;
   const user = await User.findByIdAndUpdate(userId, { $set: updates }, { new: true });
@@ -285,6 +297,81 @@ export async function resetPasswordWithToken(token, password) {
   user.password = hashPassword(passwordInput);
   user.resetPasswordToken = undefined;
   user.resetPasswordExpires = undefined;
+  await user.save();
+  return sanitizeUser(user);
+}
+
+export async function changePassword(userId, currentPassword, newPassword) {
+  if (!userId) throw new Error("Missing user");
+  const next = String(newPassword || "");
+  if (next.length < 8) throw new Error("New password must be at least 8 characters");
+  const user = await User.findById(userId);
+  if (!user) throw new Error("User not found");
+  // Users who signed up with Google have no password yet and may set one without a current password.
+  if (user.password) {
+    if (!verifyPassword(String(currentPassword || ""), user.password)) {
+      throw new Error("Current password is incorrect");
+    }
+  }
+  user.password = hashPassword(next);
+  await user.save();
+  return sanitizeUser(user);
+}
+
+export async function requestEmailChange(userId, newEmail, currentPassword) {
+  if (!userId) throw new Error("Missing user");
+  const normalized = String(newEmail || "").toLowerCase().trim();
+  if (!normalized || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+    throw new Error("Enter a valid email address");
+  }
+  const user = await User.findById(userId);
+  if (!user) throw new Error("User not found");
+  if (normalized === user.email) throw new Error("That is already your email address");
+  if (user.password) {
+    if (!verifyPassword(String(currentPassword || ""), user.password)) {
+      throw new Error("Current password is incorrect");
+    }
+  }
+  const existing = await User.findOne({ email: normalized });
+  if (existing) throw new Error("That email address is already in use");
+  const code = generateOtpCode();
+  user.pendingEmail = normalized;
+  user.emailChangeOtp = hashOtp(code);
+  user.emailChangeOtpExpires = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
+  await user.save();
+  return { code, pendingEmail: normalized };
+}
+
+export async function confirmEmailChange(userId, code) {
+  if (!userId || !code) return null;
+  const user = await User.findById(userId);
+  if (!user || !user.pendingEmail || !user.emailChangeOtp || !user.emailChangeOtpExpires) return null;
+  if (user.emailChangeOtpExpires.getTime() < Date.now()) return null;
+  if (user.emailChangeOtp !== hashOtp(code)) return null;
+  // Re-check availability in case the address was claimed during the window.
+  const existing = await User.findOne({ email: user.pendingEmail });
+  if (existing && String(existing._id) !== String(user._id)) {
+    throw new Error("That email address is already in use");
+  }
+  user.email = user.pendingEmail;
+  user.verified = true;
+  user.pendingEmail = undefined;
+  user.emailChangeOtp = undefined;
+  user.emailChangeOtpExpires = undefined;
+  await user.save();
+  return sanitizeUser(user);
+}
+
+export async function disconnectGoogle(userId) {
+  if (!userId) throw new Error("Missing user");
+  const user = await User.findById(userId);
+  if (!user) throw new Error("User not found");
+  if (!user.googleId) throw new Error("Google is not connected to this account");
+  if (!user.password) {
+    throw new Error("Set a password before disconnecting Google so you can still sign in");
+  }
+  user.googleId = undefined;
+  user.authProvider = "local";
   await user.save();
   return sanitizeUser(user);
 }

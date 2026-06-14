@@ -2,7 +2,8 @@ import express from "express";
 import passport, { isGoogleAuthEnabled } from "../config/passport.js";
 import { createMeeting, fetchMeeting, fetchMeetings } from "../controllers/meetingController.js";
 import { createSoap, fetchSoap, fetchSoaps } from "../controllers/soapNoteController.js";
-import { signup, login, me, updateProfile, sendOtp, verifyOtp, forgotPassword, resetPassword, googleCallback, googleFailure } from "../controllers/authController.js";
+import { signup, login, me, updateProfile, sendOtp, verifyOtp, forgotPassword, resetPassword, googleCallback, googleFailure, changePassword, changeEmail, verifyEmailChange, disconnectGoogle } from "../controllers/authController.js";
+import { downloadBaaDocument } from "../controllers/baaController.js";
 import {
   createDashboardMeeting,
   createPrivateMeetingNote,
@@ -58,6 +59,11 @@ router.post("/auth/send-otp", sendOtp);
 router.post("/auth/verify-otp", verifyOtp);
 router.post("/auth/forgot-password", forgotPassword);
 router.post("/auth/reset-password", resetPassword);
+router.post("/auth/change-password", requireAuth, changePassword);
+router.post("/auth/change-email", requireAuth, changeEmail);
+router.post("/auth/verify-email-change", requireAuth, verifyEmailChange);
+router.post("/auth/google/disconnect", requireAuth, disconnectGoogle);
+router.get("/baa/document", requireAuth, downloadBaaDocument);
 router.get("/billing/plans", listBillingPlans);
 router.post("/billing/checkout-session", requireAuth, createCheckoutSession);
 router.get("/billing/status", requireAuth, getBillingStatus);

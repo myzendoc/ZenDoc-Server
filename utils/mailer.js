@@ -29,13 +29,14 @@ function escapeHtml(value = "") {
     .replaceAll("'", "&#039;");
 }
 
-async function sendTemplateEmail({ to, subject, html }) {
+async function sendTemplateEmail({ to, subject, html, attachments }) {
   assertSmtpConfigured();
   await transporter.sendMail({
     from: process.env.SMTP_USER,
     to,
     subject,
     html,
+    ...(attachments ? { attachments } : {}),
   });
 }
 
@@ -69,6 +70,31 @@ export async function sendPasswordResetEmail(email, resetLink) {
     to: email,
     subject: "Reset your ZenDoc password",
     html,
+  });
+}
+
+export async function sendBaaEmail({ email, pdfBuffer, signatoryName }) {
+  if (!email || !pdfBuffer) return;
+  const safeName = escapeHtml(signatoryName || "there");
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 460px; margin: 0 auto; color: #0b1f6b; border: 1px solid #e6e6e6; border-radius: 8px; padding: 16px;">
+      <h2 style="margin: 0 0 8px; font-weight: 700; font-size: 20px;">Your signed Business Associate Agreement</h2>
+      <p style="margin: 0 0 12px; color: #555;">Hi ${safeName}, thank you for signing the ZenDoc Business Associate Agreement (BAA).</p>
+      <p style="margin: 0 0 12px; color: #555;">A copy of your fully executed agreement is attached to this email as a PDF for your records.</p>
+      <p style="margin: 14px 0 0; color: #777;">Please retain this document. If you did not sign this agreement, contact us immediately.</p>
+    </div>
+  `;
+  await sendTemplateEmail({
+    to: email,
+    subject: "Your signed ZenDoc Business Associate Agreement",
+    html,
+    attachments: [
+      {
+        filename: "Zendoc-BAA-signed.pdf",
+        content: pdfBuffer,
+        contentType: "application/pdf",
+      },
+    ],
   });
 }
 
