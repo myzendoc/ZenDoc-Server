@@ -1,5 +1,10 @@
 import { createAuditLog } from "../services/auditLogService.js";
-import { getIpFromRequest, getResourceTypeFromPath, parseBrowserFromUserAgent } from "../utils/audit.js";
+import {
+  getCountryFromRequest,
+  getIpFromRequest,
+  getResourceTypeFromPath,
+  parseBrowserFromUserAgent,
+} from "../utils/audit.js";
 
 function getActorFromRequest(req) {
   const user = req.user || {};
@@ -47,6 +52,7 @@ export function auditHttpActivity(req, res, next) {
       resourceId: getResourceId(req),
       status,
       ipAddress: getIpFromRequest(req),
+      country: getCountryFromRequest(req),
       userAgent,
       browser: parseBrowserFromUserAgent(userAgent),
       method: req.method,

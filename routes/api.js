@@ -16,6 +16,7 @@ import {
   updateMeetingNote,
   listNotesMeetings,
   getNotesMeeting,
+  invitePatientToMeeting,
   renameNotesMeeting,
 } from "../controllers/dashboardController.js";
 import { getAdminAuditLogs, getAdminDashboard, listUsers } from "../controllers/adminController.js";
@@ -64,6 +65,7 @@ router.post("/billing/portal-session", requireAuth, createPortalSession);
 
 router.post("/dashboard/meetings", requireAuth, createDashboardMeeting);
 router.get("/dashboard/meetings", requireAuth, listDashboardMeetings);
+router.post("/dashboard/meetings/:roomId/invitations", requireAuth, invitePatientToMeeting);
 router.get("/dashboard/meetings/:id", requireAuth, getDashboardMeeting);
 router.post("/dashboard/meetings/:id/notes", requireAuth, createMeetingNote);
 router.get("/dashboard/meetings/:id/notes", requireAuth, getMeetingNotes);

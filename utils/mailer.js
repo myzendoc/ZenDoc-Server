@@ -20,6 +20,15 @@ function getClientBaseUrl() {
   return String(process.env.CLIENT_APP_URL || "").trim().replace(/\/$/, "") || "http://localhost:5173";
 }
 
+function escapeHtml(value = "") {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 async function sendTemplateEmail({ to, subject, html }) {
   assertSmtpConfigured();
   await transporter.sendMail({
@@ -77,6 +86,43 @@ export async function sendWaitingRoomAlertEmail({ email, requesterName = "A user
   await sendTemplateEmail({
     to: email,
     subject: "Someone is waiting in your ZenDoc room",
+    html,
+  });
+}
+
+export async function sendPatientMeetingInviteEmail({
+  email,
+  patientName,
+  providerName,
+  meetingTitle,
+  scheduledFor,
+  roomId,
+  joinLink,
+}) {
+  if (!email) return;
+  const safePatientName = escapeHtml(patientName || "there");
+  const safeProviderName = escapeHtml(providerName || "Your healthcare provider");
+  const safeMeetingTitle = escapeHtml(meetingTitle || "ZenDoc consultation");
+  const safeRoomId = escapeHtml(roomId);
+  const safeJoinLink = escapeHtml(joinLink);
+  const scheduledDate = scheduledFor ? new Date(scheduledFor) : null;
+  const scheduleText =
+    scheduledDate && !Number.isNaN(scheduledDate.getTime())
+      ? `<p style="margin: 0 0 12px; color: #555;"><strong>Scheduled:</strong> ${escapeHtml(scheduledDate.toLocaleString("en-US", { dateStyle: "full", timeStyle: "short", timeZone: "UTC" }))} UTC</p>`
+      : "";
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 460px; margin: 0 auto; color: #0b1f6b; border: 1px solid #e6e6e6; border-radius: 8px; padding: 16px;">
+      <h2 style="margin: 0 0 8px; font-weight: 700; font-size: 20px;">You are invited to a ZenDoc meeting</h2>
+      <p style="margin: 0 0 12px; color: #555;">Hi ${safePatientName}, ${safeProviderName} invited you to join ${safeMeetingTitle}.</p>
+      ${scheduleText}
+      <a href="${safeJoinLink}" style="display: inline-block; background: #0b1f6b; color: #fff; text-decoration: none; font-weight: 700; padding: 12px 18px; border-radius: 8px;">Join Meeting</a>
+      <p style="margin: 14px 0 0; color: #777;">Room ID: ${safeRoomId}</p>
+      <p style="margin: 8px 0 0; color: #777; word-break: break-all;">${safeJoinLink}</p>
+    </div>
+  `;
+  await sendTemplateEmail({
+    to: email,
+    subject: `Invitation: ${meetingTitle || "ZenDoc consultation"}`,
     html,
   });
 }

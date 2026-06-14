@@ -37,6 +37,7 @@ export async function createAuditLog(payload = {}) {
     resourceId: payload.resourceId ? String(payload.resourceId) : undefined,
     status: payload.status === "failure" ? "failure" : "success",
     ipAddress: toSafeString(payload.ipAddress),
+    country: toSafeString(payload.country),
     userAgent: userAgent || undefined,
     browser: toSafeString(payload.browser) || parseBrowserFromUserAgent(userAgent),
     method: toSafeString(payload.method),
@@ -79,6 +80,7 @@ export async function listAuditLogs({
       { actorEmail: regex },
       { actorName: regex },
       { ipAddress: regex },
+      { country: regex },
       { browser: regex },
       { action: regex },
       { path: regex },
@@ -91,7 +93,7 @@ export async function listAuditLogs({
   ]);
 
   return {
-    logs,
+    logs: logs.map((log) => ({ ...log, timestamp: log.createdAt })),
     total,
     page: safePage,
     limit: safeLimit,

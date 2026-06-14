@@ -15,6 +15,7 @@ import { createSoapNote, getSoapNote, getSoapNotesByMeeting, getSoapNotesBySessi
 import { createPrivateNote, getPrivateNotesByMeeting, getPrivateNotesBySession } from "../services/privateNoteService.js";
 import { getTranscriptsByRoom } from "../services/transcriptService.js";
 import { FREE_SOAP_TRANSCRIPT_LIMIT, getUserEntitlements, isFreeSessionLimitExceeded } from "../services/entitlementService.js";
+import { sendPatientMeetingInviteEmail } from "../utils/mailer.js";
 
 function computeStatus(session, meeting) {
   const now = new Date();
@@ -131,6 +132,48 @@ export async function createDashboardMeeting(req, res) {
     res.json({ meeting: serializeSessionRecord({ ...meeting, meeting }, req) });
   } catch (err) {
     res.status(400).json({ error: "Failed to create meeting" });
+  }
+}
+
+export async function invitePatientToMeeting(req, res) {
+  try {
+    const meeting = await getMeeting(req.params.roomId);
+    if (!meeting) {
+      res.status(404).json({ error: "Meeting not found" });
+      return;
+    }
+    if (!canAccessMeeting(meeting, req.user)) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const patientName = String(req.body?.patientName || "").trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      res.status(400).json({ error: "Enter a valid patient email address" });
+      return;
+    }
+
+    const providerName =
+      String(req.user?.displayName || "").trim() ||
+      [req.user?.firstName, req.user?.lastName].filter(Boolean).join(" ").trim() ||
+      req.user?.email ||
+      "Your healthcare provider";
+    const joinLink = `${buildClientBase(req)}/room/${meeting.roomId}`;
+
+    await sendPatientMeetingInviteEmail({
+      email,
+      patientName,
+      providerName,
+      meetingTitle: meeting.title,
+      scheduledFor: meeting.scheduledFor,
+      roomId: meeting.roomId,
+      joinLink,
+    });
+
+    res.json({ message: `Invitation sent to ${email}` });
+  } catch (err) {
+    res.status(502).json({ error: err?.message || "Failed to send invitation" });
   }
 }
 

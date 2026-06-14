@@ -21,7 +21,7 @@ import { verifyToken } from "./utils/jwt.js";
 import passport, { configurePassport } from "./config/passport.js";
 import { auditHttpActivity } from "./middleware/audit.js";
 import { createAuditLog } from "./services/auditLogService.js";
-import { getIpFromSocket, parseBrowserFromUserAgent } from "./utils/audit.js";
+import { getCountryFromSocket, getIpFromSocket, parseBrowserFromUserAgent } from "./utils/audit.js";
 import { getUserById } from "./services/userService.js";
 import { sendWaitingRoomAlertEmail } from "./utils/mailer.js";
 import { stripeWebhook } from "./controllers/billingController.js";
@@ -197,6 +197,7 @@ function getSocketActor(socket, payload = {}) {
     actorEmail: null,
     actorName: payload?.username ? String(payload.username) : null,
     ipAddress: getIpFromSocket(socket),
+    country: getCountryFromSocket(socket),
     userAgent,
     browser: parseBrowserFromUserAgent(userAgent),
     method: "SOCKET",

@@ -10,6 +10,44 @@ function normalizeIp(raw) {
   return value.replace(/^::ffff:/, "");
 }
 
+function readHeader(headers = {}, names = []) {
+  for (const name of names) {
+    const value = headers?.[name];
+    if (Array.isArray(value) && value.length) return coerceString(value[0]);
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function getCountryName(value) {
+  const country = coerceString(value);
+  if (!country || country === "XX" || country === "T1") return "";
+  if (!/^[a-z]{2}$/i.test(country)) return country;
+  const code = country.toUpperCase();
+  try {
+    return new Intl.DisplayNames(["en"], { type: "region" }).of(code) || code;
+  } catch {
+    return code;
+  }
+}
+
+function getCountryFromLanguage(value) {
+  const language = coerceString(value).split(",")[0]?.split(";")[0]?.trim();
+  const match = language?.match(/[-_]([a-z]{2})$/i);
+  return match ? getCountryName(match[1]) : "";
+}
+
+function getCountryFromHeaders(headers = {}) {
+  const country = readHeader(headers, [
+    "cf-ipcountry",
+    "x-vercel-ip-country",
+    "x-appengine-country",
+    "x-country-code",
+    "x-client-country",
+  ]);
+  return getCountryName(country) || getCountryFromLanguage(readHeader(headers, ["accept-language"]));
+}
+
 export function getIpFromRequest(req) {
   const forwarded = req.headers?.["x-forwarded-for"];
   if (typeof forwarded === "string" && forwarded.trim()) {
@@ -30,6 +68,14 @@ export function getIpFromSocket(socket) {
     if (first) return normalizeIp(first);
   }
   return normalizeIp(socket?.handshake?.address || socket?.conn?.remoteAddress);
+}
+
+export function getCountryFromRequest(req) {
+  return getCountryFromHeaders(req?.headers);
+}
+
+export function getCountryFromSocket(socket) {
+  return getCountryName(socket?.handshake?.auth?.country) || getCountryFromHeaders(socket?.handshake?.headers);
 }
 
 export function parseBrowserFromUserAgent(userAgent = "") {
