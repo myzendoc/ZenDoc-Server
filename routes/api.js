@@ -4,6 +4,7 @@ import { createMeeting, fetchMeeting, fetchMeetings } from "../controllers/meeti
 import { createSoap, fetchSoap, fetchSoaps } from "../controllers/soapNoteController.js";
 import { signup, login, me, updateProfile, sendOtp, verifyOtp, forgotPassword, resetPassword, googleCallback, googleFailure, changePassword, changeEmail, verifyEmailChange, disconnectGoogle } from "../controllers/authController.js";
 import { downloadBaaDocument } from "../controllers/baaController.js";
+import { getGroup, postInvite, lookupInvite, postAcceptInvite, deleteMember, deleteInvite, postLeave } from "../controllers/groupController.js";
 import {
   createDashboardMeeting,
   createPrivateMeetingNote,
@@ -64,6 +65,13 @@ router.post("/auth/change-email", requireAuth, changeEmail);
 router.post("/auth/verify-email-change", requireAuth, verifyEmailChange);
 router.post("/auth/google/disconnect", requireAuth, disconnectGoogle);
 router.get("/baa/document", requireAuth, downloadBaaDocument);
+router.get("/group", requireAuth, getGroup);
+router.post("/group/invites", requireAuth, postInvite);
+router.get("/group/invites/:token", lookupInvite);
+router.post("/group/invites/accept", requireAuth, postAcceptInvite);
+router.delete("/group/invites/:id", requireAuth, deleteInvite);
+router.delete("/group/members/:userId", requireAuth, deleteMember);
+router.post("/group/leave", requireAuth, postLeave);
 router.get("/billing/plans", listBillingPlans);
 router.post("/billing/checkout-session", requireAuth, createCheckoutSession);
 router.get("/billing/status", requireAuth, getBillingStatus);

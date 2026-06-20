@@ -98,6 +98,26 @@ export async function sendBaaEmail({ email, pdfBuffer, signatoryName }) {
   });
 }
 
+export async function sendTeamInviteEmail({ email, inviterName, joinLink }) {
+  if (!email || !joinLink) return;
+  const safeInviter = escapeHtml(inviterName || "A ZenDoc user");
+  const safeLink = escapeHtml(joinLink);
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 460px; margin: 0 auto; color: #0b1f6b; border: 1px solid #e6e6e6; border-radius: 8px; padding: 16px;">
+      <h2 style="margin: 0 0 8px; font-weight: 700; font-size: 20px;">You're invited to a ZenDoc team plan</h2>
+      <p style="margin: 0 0 12px; color: #555;">${safeInviter} has invited you to join their ZenDoc team plan. Accept to unlock premium features under their subscription.</p>
+      <a href="${safeLink}" style="display: inline-block; background: #0b1f6b; color: #fff; text-decoration: none; font-weight: 700; padding: 12px 18px; border-radius: 8px;">Accept invitation</a>
+      <p style="margin: 14px 0 0; color: #777;">If you don't have a ZenDoc account yet, you'll be able to create one first.</p>
+      <p style="margin: 8px 0 0; color: #777; word-break: break-all;">${safeLink}</p>
+    </div>
+  `;
+  await sendTemplateEmail({
+    to: email,
+    subject: `${inviterName || "Someone"} invited you to a ZenDoc team plan`,
+    html,
+  });
+}
+
 export async function sendWaitingRoomAlertEmail({ email, requesterName = "A user", roomId }) {
   if (!email) return;
   const roomLink = `${getClientBaseUrl()}/room/${roomId}`;

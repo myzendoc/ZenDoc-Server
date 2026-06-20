@@ -24,11 +24,20 @@ export async function getUserEntitlements(userId) {
   }
 
   const user = await getUserById(id);
-  const paid = isPaidSubscriber(user);
+  let paid = isPaidSubscriber(user);
+  let viaGroup = false;
+  if (!paid && user?.groupOwnerId) {
+    const owner = await getUserById(user.groupOwnerId);
+    if (isPaidSubscriber(owner)) {
+      paid = true;
+      viaGroup = true;
+    }
+  }
   return {
     userId: id,
     paid,
     free: !paid,
+    viaGroup,
     planKey: String(user?.subscriptionPlanKey || "free"),
     status: String(user?.subscriptionStatus || "inactive"),
     screenShareAllowed: paid,

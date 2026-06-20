@@ -1,6 +1,8 @@
 import Stripe from "stripe";
 import { User } from "../models/user.js";
 
+export const GROUP_SEAT_LIMIT = 10;
+
 const PLAN_DEFS = [
   {
     key: "free",
@@ -68,6 +70,43 @@ const PLAN_DEFS = [
       "BAA available",
     ],
   },
+  {
+    key: "premium_group_monthly",
+    aliases: ["group"],
+    name: "Group Plan",
+    amount: 17900,
+    currency: "usd",
+    interval: "month",
+    cadenceLabel: "/ month",
+    priceEnv: "STRIPE_PRICE_PREMIUM_GROUP_MONTHLY",
+    seatLimit: GROUP_SEAT_LIMIT,
+    features: [
+      "Everything in Premium",
+      `Up to ${GROUP_SEAT_LIMIT} team members`,
+      "Invite and manage your team",
+      "Unlimited Automated Clinical (SOAP) Notes",
+      "Unlimited real-time meeting transcripts",
+      "BAA available",
+    ],
+  },
+  {
+    key: "premium_group_yearly",
+    name: "Group Plan",
+    amount: 159900,
+    currency: "usd",
+    interval: "year",
+    cadenceLabel: "/ year",
+    priceEnv: "STRIPE_PRICE_PREMIUM_GROUP_YEARLY",
+    seatLimit: GROUP_SEAT_LIMIT,
+    features: [
+      "Everything in Premium",
+      `Up to ${GROUP_SEAT_LIMIT} team members`,
+      "Invite and manage your team",
+      "Unlimited Automated Clinical (SOAP) Notes",
+      "Unlimited real-time meeting transcripts",
+      "BAA available",
+    ],
+  },
 ];
 
 function getStripeClient() {
@@ -92,12 +131,20 @@ export function getPlanCatalog() {
     currency: plan.currency,
     interval: plan.interval,
     cadenceLabel: plan.cadenceLabel,
+    seatLimit: plan.seatLimit || 1,
     features: plan.features,
   }));
 }
 
 function getPlanDef(planKey) {
-  return PLAN_DEFS.find((item) => item.key === planKey) || null;
+  const key = String(planKey || "").trim();
+  return PLAN_DEFS.find((item) => item.key === key || item.aliases?.includes(key)) || null;
+}
+
+export function isGroupPlanKey(planKey = "") {
+  const key = String(planKey || "").trim();
+  const planDef = getPlanDef(key);
+  return Boolean(planDef?.seatLimit);
 }
 
 async function resolvePriceIdForPlan(stripe, planDef) {
@@ -189,6 +236,17 @@ function mapStripeIntervalToPlanKey(interval = "") {
   return "free";
 }
 
+function mapStripePriceToPlanKey(priceId = "") {
+  const id = String(priceId || "").trim();
+  if (!id) return "";
+  const planDef = PLAN_DEFS.find((plan) => {
+    const envKey = plan.priceEnv;
+    if (!envKey) return false;
+    return String(process.env[envKey] || "").trim() === id;
+  });
+  return planDef?.key || "";
+}
+
 async function updateUserFromSubscription(subscription, fallbackUserId = "") {
   const customerId = String(subscription?.customer || "").trim();
   if (!customerId) return null;
@@ -201,7 +259,10 @@ async function updateUserFromSubscription(subscription, fallbackUserId = "") {
 
   const primaryItem = subscription?.items?.data?.[0];
   const interval = primaryItem?.price?.recurring?.interval || "";
-  const planKey = mapStripeIntervalToPlanKey(interval);
+  const metaPlanKey = String(subscription?.metadata?.planKey || "").trim();
+  const metaPlanDef = getPlanDef(metaPlanKey);
+  const pricePlanKey = mapStripePriceToPlanKey(primaryItem?.price?.id);
+  const planKey = metaPlanDef?.key || pricePlanKey || mapStripeIntervalToPlanKey(interval);
   const periodEndSec = Number(subscription?.current_period_end || 0);
 
   user.stripeCustomerId = customerId || user.stripeCustomerId;

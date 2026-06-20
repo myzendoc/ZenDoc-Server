@@ -23,6 +23,7 @@ const userSchema = new mongoose.Schema(
     npiNumber: { type: String },
     primarySpecialty: { type: String },
     statesLicensed: { type: [String], default: [] },
+    groupOwnerId: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true, sparse: true },
     stripeCustomerId: { type: String, index: true, sparse: true },
     stripeSubscriptionId: { type: String, index: true, sparse: true },
     stripePriceId: { type: String },
