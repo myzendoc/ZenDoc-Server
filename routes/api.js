@@ -1,7 +1,5 @@
 import express from "express";
 import passport, { isGoogleAuthEnabled } from "../config/passport.js";
-import { createMeeting, fetchMeeting, fetchMeetings } from "../controllers/meetingController.js";
-import { createSoap, fetchSoap, fetchSoaps } from "../controllers/soapNoteController.js";
 import { signup, login, me, updateProfile, sendOtp, verifyOtp, forgotPassword, resetPassword, googleCallback, googleFailure, changePassword, changeEmail, verifyEmailChange, disconnectGoogle } from "../controllers/authController.js";
 import { downloadBaaDocument } from "../controllers/baaController.js";
 import { getGroup, postInvite, lookupInvite, postAcceptInvite, deleteMember, deleteInvite, postLeave } from "../controllers/groupController.js";
@@ -97,13 +95,5 @@ router.get("/admin/users", requireAuth, requireAdmin, listUsers);
 router.get("/admin/dashboard", requireAuth, requireAdmin, getAdminDashboard);
 router.get("/admin/audit-logs", requireAuth, requireAdmin, getAdminAuditLogs);
 router.get("/analytics/summary", requireAuth, getAnalyticsSummary);
-
-router.post("/meetings", createMeeting);
-router.get("/meetings", fetchMeetings);
-router.get("/meetings/:roomId", fetchMeeting);
-
-router.post("/soaps", createSoap);
-router.get("/soaps/:roomId", fetchSoaps);
-router.get("/soap/:id", fetchSoap);
 
 export default router;
