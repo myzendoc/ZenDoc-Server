@@ -8,6 +8,7 @@ import { pipeToRouter } from "./pipeToRouter.js";
 import { config } from "./config.js";
 import { fileURLToPath } from "url";
 import express from "express";
+import helmet from "helmet";
 import path from "path";
 import { getPort, removePort } from "./ports.js";
 import dotenv from 'dotenv'
@@ -17,22 +18,40 @@ import { saveFinalTranscript } from "./services/transcriptService.js";
 import { sessionManager } from "./services/sessionManager.js";
 import { getMeeting } from "./services/meetingService.js";
 import apiRouter from "./routes/api.js";
-import { verifyToken } from "./utils/jwt.js";
 import passport, { configurePassport } from "./config/passport.js";
 import { auditHttpActivity } from "./middleware/audit.js";
 import { createAuditLog } from "./services/auditLogService.js";
-import { getCountryFromSocket, getIpFromSocket, parseBrowserFromUserAgent } from "./utils/audit.js";
-import { getUserById } from "./services/userService.js";
+import { getIpFromSocket, getSocketAuditActor } from "./utils/audit.js";
+import { getUserById, isUserIdActive } from "./services/userService.js";
 import { sendWaitingRoomAlertEmail } from "./utils/mailer.js";
 import { stripeWebhook } from "./controllers/billingController.js";
 import { getRoomEntitlements, isFreeSessionLimitExceeded } from "./services/entitlementService.js";
+import {
+  createSocketAuthorization,
+  getMeetingRole,
+  getSocketMeeting,
+  hasRoomAdmission,
+  isMeetingCreatorJoin,
+  isSocketRoomManager,
+  isSocketRoomMember,
+} from "./utils/socketAuth.js";
+import { sendErrorResponse } from "./utils/errors.js";
+import { logError } from "./utils/logging.js";
+import { getTranscriptionProcessEnv } from "./utils/transcriptionProcess.js";
+import { applyCors, isAllowedOrigin } from "./utils/origins.js";
+import { authenticateSocketSession, revalidateSocketSession } from "./middleware/socketSession.js";
+import { registerSocketDisconnector } from "./services/sessionRevocation.js";
+import { startScheduledJobs, stopScheduledJobs } from "./services/scheduler.js";
+import { consumeWaitingRoomEmailLimit } from "./middleware/rateLimit.js";
 
 dotenv.config()
 
 connectDatabase().then(()=>{
   console.log("Mongo connected");
+  // Retention purge and audit-chain verification; lease-locked so only one instance runs them.
+  startScheduledJobs();
 }).catch((err) => {
-  console.error("Mongo connection error", err);
+  logError("database.connection_failed", err);
   process.exit(1);
 });
 
@@ -40,18 +59,53 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.set("trust proxy", "loopback");
 configurePassport();
 
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
-  res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-  if (req.method === "OPTIONS") {
-    res.sendStatus(200);
-    return;
-  }
+const isDevelopment = process.env.NODE_ENV === "development";
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        baseUri: ["'self'"],
+        connectSrc: [
+          "'self'",
+          "https://myzendoc.com",
+          "https://www.myzendoc.com",
+          "wss://myzendoc.com",
+          "wss://www.myzendoc.com",
+          ...(isDevelopment ? ["http://localhost:*", "ws://localhost:*"] : []),
+        ],
+        fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
+        formAction: ["'self'"],
+        frameAncestors: ["'none'"],
+        imgSrc: ["'self'", "data:", "blob:"],
+        mediaSrc: ["'self'", "blob:"],
+        objectSrc: ["'none'"],
+        scriptSrc: ["'self'"],
+        scriptSrcAttr: ["'none'"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        workerSrc: ["'self'", "blob:"],
+        upgradeInsecureRequests: isDevelopment ? null : [],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
+    referrerPolicy: { policy: "no-referrer" },
+    strictTransportSecurity: isDevelopment
+      ? false
+      : { maxAge: 31536000, includeSubDomains: false, preload: false },
+  })
+);
+app.use((_req, res, next) => {
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(self), microphone=(self), display-capture=(self), geolocation=(), payment=(), usb=()"
+  );
   next();
 });
+
+app.use(applyCors);
 
 app.use((req, res, next) => {
   if (String(req.originalUrl || "").startsWith("/api/billing/webhook")) {
@@ -62,7 +116,15 @@ app.use((req, res, next) => {
 });
 app.post("/api/billing/webhook", express.raw({ type: "*/*" }), stripeWebhook);
 app.use(passport.initialize());
-app.use("/api", auditHttpActivity, apiRouter);
+app.use(
+  "/api",
+  (_req, res, next) => {
+    res.setHeader("Cache-Control", "no-store");
+    next();
+  },
+  auditHttpActivity,
+  apiRouter
+);
 app.use(express.static(path.join(__dirname, "dist")));
 
 app.get("*", (req, res) => {
@@ -70,23 +132,46 @@ app.get("*", (req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  console.error("express error", {
-    path: req?.originalUrl || req?.url,
-    method: req?.method,
-    message: err?.message || err,
-  });
+  logError("http.request_failed", err, { method: req?.method });
   if (res.headersSent) {
     next(err);
     return;
   }
-  res.status(err?.status || 500).json({ error: err?.message || "Internal server error" });
+  sendErrorResponse(res, err, { fallback: "Internal server error" });
 });
 
 const server = createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin(origin, callback) {
+      callback(isAllowedOrigin(origin) ? null : new Error("Origin not allowed"), isAllowedOrigin(origin));
+    },
+    credentials: true,
   },
+});
+
+io.use(async (socket, next) => {
+  try {
+    socket.data.auth = await authenticateSocketSession(socket);
+    next();
+  } catch (err) {
+    logError("socket.authentication_failed", err);
+    socket.data.auth = null;
+    next();
+  }
+});
+
+// Drops live calls immediately instead of at the next revalidation.
+registerSocketDisconnector(async (userId, reason) => {
+  let dropped = 0;
+  for (const socket of io.sockets.sockets.values()) {
+    if (String(socket.data?.auth?.userId || "") !== String(userId)) continue;
+    socket.data.auth = null;
+    socket.emit("session-revoked", { reason });
+    socket.disconnect(true);
+    dropped += 1;
+  }
+  return dropped;
 });
 
 let Users = new Map();
@@ -108,31 +193,14 @@ let consumerObjects = new Map();
 let uniquePipedProducers = [];
 let waitingRooms = new Map();
 
-function extractUserIdFromToken(authToken) {
-  if (!authToken) return null;
-  const payload = verifyToken(authToken, process.env.JWT_SECRET);
-  if (payload?.sub) return String(payload.sub);
-  if (process.env.ADMIN_JWT_SECRET) {
-    const adminPayload = verifyToken(authToken, process.env.ADMIN_JWT_SECRET);
-    if (adminPayload?.sub) return String(adminPayload.sub);
-  }
-  return null;
-}
-
-function isMeetingCreatorJoin(meeting, user = {}) {
-  if (!meeting) return false;
-  const meetingCreatorId = meeting?.createdBy ? String(meeting.createdBy) : "";
-  const tokenUserId = extractUserIdFromToken(user?.authToken);
-  const payloadUserId = user?.userId ? String(user.userId) : "";
-
-  if (meetingCreatorId) {
-    if (tokenUserId && tokenUserId === meetingCreatorId) return true;
-    if (payloadUserId && payloadUserId === meetingCreatorId) return true;
-    return false;
-  }
-
-  return Boolean(user?.isCreator);
-}
+const socketAuth = createSocketAuthorization({ io, rooms, waitingRooms, sessionManager });
+const {
+  admitSocketToRoom,
+  authorizeWaitingWatchRoom,
+  findRoomProducer,
+  getSocketOwnedProducer,
+  removeProducersFromRoom,
+} = socketAuth;
 
 function serializeWaitingUsers(room) {
   const list = waitingRooms.get(room) || [];
@@ -152,11 +220,7 @@ function emitWaitingUpdate(room) {
 }
 
 function canManageWaiting(socket, room) {
-  if (!room) return false;
-  if (socket.rooms.has(`${room}-creator`)) return true;
-  const watchedRooms = socket.data?.waitingWatchRooms;
-  if (watchedRooms instanceof Set && watchedRooms.has(room)) return true;
-  return false;
+  return isSocketRoomManager(socket, room);
 }
 
 function removeWaitingSocket(socketId) {
@@ -185,27 +249,25 @@ async function getProviderEmailForRoom(roomId) {
   return String(provider?.email || "").trim().toLowerCase();
 }
 
-function getSocketActor(socket, payload = {}) {
-  const tokenUserId = extractUserIdFromToken(payload?.authToken);
-  const payloadUserId = payload?.userId ? String(payload.userId) : "";
-  const actorUserId = tokenUserId || payloadUserId || null;
-  const actorRole = payload?.isAdmin ? "admin" : (actorUserId ? "provider" : "guest");
-  const userAgent = String(socket?.handshake?.headers?.["user-agent"] || "");
-  return {
-    actorUserId,
-    actorRole,
-    actorEmail: null,
-    actorName: payload?.username ? String(payload.username) : null,
-    ipAddress: getIpFromSocket(socket),
-    country: getCountryFromSocket(socket),
-    userAgent,
-    browser: parseBrowserFromUserAgent(userAgent),
-    method: "SOCKET",
-  };
+function maybeSendWaitingRoomAlert(socket, room, username) {
+  const source = getIpFromSocket(socket) || socket.id;
+  const rate = consumeWaitingRoomEmailLimit(`${source}:${room}`);
+  if (!rate.allowed) return;
+  getProviderEmailForRoom(room)
+    .then((email) => sendWaitingRoomAlertEmail({ email, requesterName: username, roomId: room }))
+    .catch((err) => logError("waiting_room.email_failed", err));
+}
+
+function getJoinAuditReason(message = "") {
+  if (message === "Missing room id") return "missing_payload";
+  if (message === "Invalid room link") return "invalid_room";
+  if (message === "Waiting room approval required") return "approval_required";
+  if (message === "Waiting for host to start the meeting") return "host_offline";
+  return message ? "join_denied" : undefined;
 }
 
 function logSocketAudit(socket, { action, status = "success", payload = {}, resourceId = null, metadata = {} } = {}) {
-  const actor = getSocketActor(socket, payload);
+  const actor = getSocketAuditActor(socket, payload);
   createAuditLog({
     ...actor,
     action,
@@ -215,14 +277,27 @@ function logSocketAudit(socket, { action, status = "success", payload = {}, reso
     path: action,
     metadata,
   }).catch((err) => {
-    console.error("audit socket log failed", err?.message || err);
+    logError("audit.socket_write_failed", err);
   });
 }
 
 io.on("connection", (socket) => {
   socket.data.waitingWatchRooms = new Set();
+  socket.data.admittedRooms = new Set();
+  socket.emit("session:authenticated", { authenticated: Boolean(socket.data.auth) });
 
-  socket.on("waiting:watch", ({ rooms: roomsToWatch } = {}) => {
+  socket.use(async (_packet, next) => {
+    try {
+      await revalidateSocketSession(socket);
+      next();
+    } catch (err) {
+      logError("socket.session_validation_failed", err);
+      socket.data.auth = null;
+      next();
+    }
+  });
+
+  socket.on("waiting:watch", async ({ rooms: roomsToWatch } = {}, callback) => {
     const prevRooms = socket.data?.waitingWatchRooms || new Set();
     prevRooms.forEach((room) => {
       socket.leave(`waiting-watch-${room}`);
@@ -234,19 +309,35 @@ io.on("connection", (socket) => {
         : []
     );
 
-    socket.data.waitingWatchRooms = nextRooms;
-    nextRooms.forEach((room) => {
+    const allowedRooms = new Set();
+    for (const room of nextRooms) {
+      if (await authorizeWaitingWatchRoom(socket, room)) {
+        allowedRooms.add(room);
+      } else {
+        logSocketAudit(socket, {
+          action: "waiting:watch",
+          status: "failure",
+          payload: {},
+          resourceId: room,
+          metadata: { reason: "forbidden" },
+        });
+      }
+    }
+
+    socket.data.waitingWatchRooms = allowedRooms;
+    allowedRooms.forEach((room) => {
       socket.join(`waiting-watch-${room}`);
       socket.emit("waiting:update", { room, waiting: serializeWaitingUsers(room) });
     });
+    callback?.({ status: "ok", rooms: [...allowedRooms] });
   });
 
-  socket.on("waiting:request", async ({ room, peerId, username, authToken, userId, isCreator } = {}, callback) => {
+  socket.on("waiting:request", async ({ room, peerId, username } = {}, callback) => {
     if (!room || !peerId || !username) {
       logSocketAudit(socket, {
         action: "waiting:request",
         status: "failure",
-        payload: { authToken, userId, username },
+        payload: { username },
         resourceId: room || null,
         metadata: { reason: "missing_payload" },
       });
@@ -258,7 +349,7 @@ io.on("connection", (socket) => {
       logSocketAudit(socket, {
         action: "waiting:request",
         status: "failure",
-        payload: { authToken, userId, username },
+        payload: { username },
         resourceId: room,
         metadata: { reason: "invalid_room" },
       });
@@ -266,9 +357,22 @@ io.on("connection", (socket) => {
       return;
     }
 
+    // A deactivated provider's rooms admit nobody, invite link or not.
+    if (meeting.createdBy && !(await isUserIdActive(meeting.createdBy))) {
+      logSocketAudit(socket, {
+        action: "waiting:request",
+        status: "failure",
+        payload: { username },
+        resourceId: room,
+        metadata: { reason: "host_deactivated" },
+      });
+      callback?.({ error: "This meeting is no longer available. Contact your provider." });
+      return;
+    }
+
     const roomObj = rooms.get(room);
     const creatorSocket = roomObj?.creatorSocketId ? io.sockets.sockets.get(roomObj.creatorSocketId) : null;
-    const isRequesterCreator = isMeetingCreatorJoin(meeting, { room, peerId, username, authToken, userId, isCreator });
+    const isRequesterCreator = isMeetingCreatorJoin(meeting, socket.data?.auth);
     if (!roomObj || !roomObj?.creatorPeerId || !creatorSocket) {
       if (isRequesterCreator) {
         callback?.({ autoAdmit: true });
@@ -288,12 +392,10 @@ io.on("connection", (socket) => {
         emitWaitingUpdate(room);
       }
       callback?.({ queued: true });
-      getProviderEmailForRoom(room)
-        .then((email) => sendWaitingRoomAlertEmail({ email, requesterName: username, roomId: room }))
-        .catch((err) => console.error("waiting room email failed", err?.message || err));
+      maybeSendWaitingRoomAlert(socket, room, username);
       logSocketAudit(socket, {
         action: "waiting:request",
-        payload: { authToken, userId, username },
+        payload: { username },
         resourceId: room,
         metadata: { queued: true, peerId },
       });
@@ -319,12 +421,10 @@ io.on("connection", (socket) => {
     }
 
     callback?.({ queued: true });
-    getProviderEmailForRoom(room)
-      .then((email) => sendWaitingRoomAlertEmail({ email, requesterName: username, roomId: room }))
-      .catch((err) => console.error("waiting room email failed", err?.message || err));
+    maybeSendWaitingRoomAlert(socket, room, username);
     logSocketAudit(socket, {
       action: "waiting:request",
-      payload: { authToken, userId, username },
+      payload: { username },
       resourceId: room,
       metadata: { queued: true, peerId },
     });
@@ -375,6 +475,7 @@ io.on("connection", (socket) => {
       waitingRooms.delete(room);
     }
 
+    admitSocketToRoom(socketId, room);
     io.to(socketId).emit("waiting:approved", {
       room,
       peerId: target.peerId,
@@ -383,9 +484,9 @@ io.on("connection", (socket) => {
     emitWaitingUpdate(room);
     logSocketAudit(socket, {
       action: "waiting:approve",
-      payload: { username: target.username, userId: target.peerId },
+      payload: {},
       resourceId: room,
-      metadata: { approvedSocketId: socketId, approvedPeerId: target.peerId },
+      metadata: { targetPeerId: target.peerId },
     });
     callback?.({ status: "ok" });
   });
@@ -442,17 +543,43 @@ io.on("connection", (socket) => {
     emitWaitingUpdate(room);
     logSocketAudit(socket, {
       action: "waiting:reject",
-      payload: { username: target.username, userId: target.peerId },
+      payload: {},
       resourceId: room,
-      metadata: { rejectedSocketId: socketId, rejectedPeerId: target.peerId },
+      metadata: { targetPeerId: target.peerId },
     });
     callback?.({ status: "ok" });
   });
 
   socket.on("addUserCall", async (user, callback) => {
     removeWaitingSocket(socket.id);
-    const result = await addUserCall(user, socket);
-    callback?.(result);
+    const room = typeof user?.room === "string" ? user.room.trim() : "";
+    const peerId = typeof user?.peerId === "string" ? user.peerId.trim() : "";
+    try {
+      const result = await addUserCall(user, socket);
+      const membership = getSocketMeeting(socket);
+      logSocketAudit(socket, {
+        action: "meeting.join",
+        status: result?.error ? "failure" : "success",
+        payload: { username: user?.username },
+        resourceId: room || null,
+        metadata: {
+          peerId: peerId || undefined,
+          role: membership?.role,
+          reason: getJoinAuditReason(result?.error),
+        },
+      });
+      callback?.(result);
+    } catch (err) {
+      logError("meeting.join_failed", err);
+      logSocketAudit(socket, {
+        action: "meeting.join",
+        status: "failure",
+        payload: { username: user?.username },
+        resourceId: room || null,
+        metadata: { peerId: peerId || undefined, reason: "exception" },
+      });
+      callback?.({ error: "Failed to join meeting" });
+    }
   });
 
   socket.on("getRTPCapabilites", (callback) => {
@@ -464,7 +591,9 @@ io.on("connection", (socket) => {
   });
 
   socket.on("stopTranscription", async ({ room, peerId }, callback) => {
-    const roomObj = rooms.get(room);
+    const membership = getSocketMeeting(socket);
+    const authorizedRoom = membership?.room === room ? room : null;
+    const roomObj = rooms.get(authorizedRoom);
     if (!roomObj) {
       logSocketAudit(socket, {
         action: "stopTranscription",
@@ -476,7 +605,7 @@ io.on("connection", (socket) => {
       callback?.({ error: "Room not found" });
       return;
     }
-    if (roomObj?.creatorPeerId !== peerId) {
+    if (!isSocketRoomManager(socket, room)) {
       logSocketAudit(socket, {
         action: "stopTranscription",
         status: "failure",
@@ -504,7 +633,7 @@ io.on("connection", (socket) => {
         metadata: { peerId, soapsGenerated: Boolean(soaps) },
       });
     } catch (err) {
-      console.error("stopTranscription error", err);
+      logError("transcription.stop_failed", err);
       logSocketAudit(socket, {
         action: "stopTranscription",
         status: "failure",
@@ -517,7 +646,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("connectTransport", ({ dtlsParameters, id }, callback) => {
-    connectTransport(dtlsParameters, id, callback);
+    connectTransport(socket, dtlsParameters, id, callback);
   });
 
   socket.on("produce", (data, callback) => {
@@ -525,7 +654,15 @@ io.on("connection", (socket) => {
   });
 
   socket.on("chat", (message) => {
-    socket.broadcast.to(message?.room).emit("chat", message);
+    const room = message?.room;
+    const membership = getSocketMeeting(socket);
+    if (!isSocketRoomMember(socket, room) || message?.peerId !== membership?.peerId) return;
+    socket.broadcast.to(room).emit("chat", {
+      ...message,
+      room,
+      peerId: membership.peerId,
+      name: membership.username,
+    });
   });
 
   socket.on("createConsumeTransport", (data) => {
@@ -533,7 +670,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("transportConnect", (data, callback) => {
-    connectConsumerTransport(data, callback);
+    connectConsumerTransport(data, socket, callback);
   });
 
   socket.on("startConsuming", (data) => {
@@ -541,24 +678,35 @@ io.on("connection", (socket) => {
   });
 
   socket.on("closeScreenShare", ({ producerIds, room }, callback) => {
-    for (let i = 0; i < producerIds.length; i++) {
-      const producer = producerObjects.get(producerIds[i]);
-      producer?.close();
-      producerObjects.delete(producerIds[i]);
-      pipedProducers.delete(producerIds[i]);
+    if (!isSocketRoomMember(socket, room) || !Array.isArray(producerIds)) {
+      callback?.({ error: "Not allowed" });
+      return;
     }
-    const roomObj = rooms.get(room);
-    const roomProd = roomObj?.producers;
-    const producersFilter = roomProd?.filter(
-      (producer) => !producerIds.some((id) => producer?.producerId === id)
-    );
-    rooms.set(room, { ...roomObj, producers: producersFilter });
-    callback({
+    const ownedProducerIds = producerIds.filter((producerId) => {
+      const roomProducer = getSocketOwnedProducer(socket, producerId);
+      return Boolean(roomProducer?.screenShare);
+    });
+    if (!ownedProducerIds.length) {
+      callback?.({ error: "Not allowed" });
+      return;
+    }
+    for (let i = 0; i < ownedProducerIds.length; i++) {
+      const producer = producerObjects.get(ownedProducerIds[i]);
+      producer?.close();
+      producerObjects.delete(ownedProducerIds[i]);
+      pipedProducers.delete(ownedProducerIds[i]);
+    }
+    removeProducersFromRoom(room, ownedProducerIds);
+    callback?.({
       status: "OK",
     });
   });
 
   socket.on("handleProducer", async ({ producerId, state }, callback) => {
+    if (!getSocketOwnedProducer(socket, producerId)) {
+      callback?.({ error: "Not allowed" });
+      return;
+    }
     const producer = producerObjects.get(producerId);
 
     if (state) {
@@ -567,56 +715,74 @@ io.on("connection", (socket) => {
       await producer?.resume();
     }
 
-    callback({
+    callback?.({
       status: "OK",
     });
   });
 
   socket.on("producerRestartIce", async (id, callback) => {
-    const transport = producerTransports.get(id)?.transport;
+    const transportObj = producerTransports.get(id);
+    if (transportObj?.ownerSocketId !== socket.id) {
+      callback?.({ error: "Not allowed" });
+      return;
+    }
+    const transport = transportObj?.transport;
     const iceparams = await transport?.restartIce();
-    callback(iceparams);
+    callback?.(iceparams);
   });
 
   socket.on("consumerRestartIce", async (storageId, callback) => {
-    const transport = consumerTransports.get(storageId)?.transport;
+    const transportObj = consumerTransports.get(storageId);
+    if (transportObj?.ownerSocketId !== socket.id) {
+      callback?.({ error: "Not allowed" });
+      return;
+    }
+    const transport = transportObj?.transport;
     const iceparams = await transport?.restartIce();
-    callback(iceparams);
+    callback?.(iceparams);
   });
 
   socket.on("closeProducer", ({ producerId, room }, callback) => {
+    if (!isSocketRoomMember(socket, room) || !getSocketOwnedProducer(socket, producerId)) {
+      callback?.({ error: "Not allowed" });
+      return;
+    }
     const producer = producerObjects.get(producerId);
-    if (!producer) return;
+    if (!producer) {
+      callback?.({ error: "Producer not found" });
+      return;
+    }
     producer?.close();
     producerObjects.delete(producerId);
     pipedProducers.delete(producerId);
-    const roomObj = rooms.get(room);
-    const roomProd = roomObj?.producers;
-    const producersFilter = roomProd?.filter(
-      (producer) => producer?.producerId !== producerId
-    );
-    if (producersFilter?.length > 0) {
-      rooms.set(room, { ...roomObj, producers: producersFilter });
-    } else {
-      rooms.delete(room);
-      waitingRooms.delete(room);
-      sessionManager.endSession(room).catch((err) => console.error("Session finalize error", err));
-    }
+    removeProducersFromRoom(room, [producerId]);
 
-    callback({
+    callback?.({
       status: "OK",
     });
   });
 
   socket.on("draw", (data) => {
-    socket.broadcast.to(data.roomId).emit("draw", data);
+    const room = data?.roomId;
+    if (!isSocketRoomMember(socket, room)) return;
+    socket.broadcast.to(room).emit("draw", { ...data, roomId: room });
   });
 
   socket.on("clearAnnotations", ({ roomId }) => {
+    if (!isSocketRoomMember(socket, roomId)) return;
     socket.broadcast.to(roomId).emit("clearAnnotations");
   });
 
   socket.on("disconnecting", () => {
+    const membership = getSocketMeeting(socket);
+    if (membership?.room) {
+      logSocketAudit(socket, {
+        action: "meeting.leave",
+        payload: { username: membership.username },
+        resourceId: membership.room,
+        metadata: { peerId: membership.peerId, role: membership.role },
+      });
+    }
     removeWaitingSocket(socket.id);
     handleDisconnecting(socket);
   });
@@ -672,59 +838,85 @@ async function startMediasoup() {
 startMediasoup();
 
 async function addUserCall(user, socket) {
-  if (!user?.room) return { error: "Missing room id" };
-  const meeting = await getMeeting(user.room);
+  const room = typeof user?.room === "string" ? user.room.trim() : "";
+  const peerId = typeof user?.peerId === "string" ? user.peerId.trim() : "";
+  const username = typeof user?.username === "string" ? user.username.trim() : "";
+  if (!room || !peerId || !username) return { error: "Missing room id" };
+  const meeting = await getMeeting(room);
   if (!meeting) return { error: "Invalid room link" };
-  let roomObj = rooms.get(user?.room);
-  let isCreator = false;
-  const creatorJoin = isMeetingCreatorJoin(meeting, user);
-  const entitlements = await getRoomEntitlements(user?.room);
+  let roomObj = rooms.get(room);
+  let role = "guest";
+  const creatorJoin = isMeetingCreatorJoin(meeting, socket.data?.auth);
+  const creatorSocket = roomObj?.creatorSocketId ? io.sockets.sockets.get(roomObj.creatorSocketId) : null;
+  const creatorOnline = Boolean(roomObj?.creatorPeerId && creatorSocket);
+
+  if (!creatorJoin && creatorOnline && !hasRoomAdmission(socket, room)) {
+    return { error: "Waiting room approval required" };
+  }
+
+  if (!creatorJoin && !creatorOnline) {
+    return { error: "Waiting for host to start the meeting" };
+  }
+
+  const entitlements = await getRoomEntitlements(room);
 
   if (!roomObj) {
     roomObj = {
       producers: [],
-      creatorPeerId: creatorJoin ? user?.peerId : null,
+      creatorPeerId: creatorJoin ? peerId : null,
       creatorSocketId: creatorJoin ? socket.id : null,
+      creatorUserId: creatorJoin && meeting?.createdBy ? String(meeting.createdBy) : null,
       screenShareAllowed: entitlements.screenShareAllowed,
       transcriptRecordingEnabled: true,
     };
-    rooms.set(user?.room, roomObj);
-    isCreator = creatorJoin;
-    if (isCreator) {
-      await sessionManager.startSession(user?.room, {
-        creatorPeerId: user?.peerId,
+    rooms.set(room, roomObj);
+    if (creatorJoin) {
+      role = getMeetingRole(meeting, socket.data?.auth).role;
+      await sessionManager.startSession(room, {
+        creatorPeerId: peerId,
         creatorSocketId: socket.id,
       });
     }
-  } else if (!roomObj?.creatorPeerId && creatorJoin) {
-    roomObj = { ...roomObj, creatorPeerId: user?.peerId, creatorSocketId: socket.id };
-    rooms.set(user?.room, roomObj);
-    isCreator = true;
-    await sessionManager.startSession(user?.room, {
-      creatorPeerId: user?.peerId,
+  } else if (creatorJoin) {
+    role = getMeetingRole(meeting, socket.data?.auth).role;
+    roomObj = {
+      ...roomObj,
+      creatorPeerId: peerId,
+      creatorSocketId: socket.id,
+      creatorUserId: meeting?.createdBy ? String(meeting.createdBy) : roomObj?.creatorUserId || null,
+    };
+    rooms.set(room, roomObj);
+    await sessionManager.startSession(room, {
+      creatorPeerId: peerId,
       creatorSocketId: socket.id,
     });
-  } else if (roomObj?.creatorPeerId === user?.peerId) {
-    isCreator = true;
   }
 
-  const session = sessionManager.getSessionContext(user?.room);
+  const session = sessionManager.getSessionContext(room);
   roomObj = {
-    ...rooms.get(user?.room),
+    ...rooms.get(room),
     screenShareAllowed: entitlements.screenShareAllowed,
     transcriptRecordingEnabled: !isFreeSessionLimitExceeded(entitlements, session?.sessionIndex),
   };
-  rooms.set(user?.room, roomObj);
+  rooms.set(room, roomObj);
 
-  Users.set(socket.id, { ...user });
-  socket.join(user?.room);
-  if (isCreator) {
-    socket.join(`${user?.room}-creator`);
+  socket.data.meeting = {
+    room,
+    peerId,
+    username,
+    role,
+    userId: role === "guest" ? null : socket.data?.auth?.userId || null,
+  };
+  Users.set(socket.id, { room, peerId, username, role });
+  socket.join(room);
+  if (["creator", "admin"].includes(role)) {
+    socket.join(`${room}-creator`);
   }
-  const filteredProducers = rooms.get(user?.room)?.producers;
+  socket.data.admittedRooms?.delete(room);
+  const filteredProducers = rooms.get(room)?.producers || [];
   socket.emit("currentProducers", filteredProducers);
   return {
-    isCreator,
+    isCreator: ["creator", "admin"].includes(role),
     screenShareAllowed: roomObj?.screenShareAllowed !== false,
     transcriptRecordingEnabled: roomObj?.transcriptRecordingEnabled !== false,
   };
@@ -750,7 +942,7 @@ async function getMinCPUUsageRouter(routers) {
       return usages[key].cpu < usages[keys[minIndex]].cpu ? index : minIndex;
     }, 0);
   } catch (err) {
-    console.log(err, "while calculating cpu usage");
+    logError("media.cpu_usage_failed", err);
     minCPUUsageIdx = Math.floor(Math.random() * routers?.length);
   }
 
@@ -776,6 +968,11 @@ async function getProducerRouter() {
 
 async function createTransport(socket, id) {
   try {
+    const membership = getSocketMeeting(socket);
+    if (!membership || membership.peerId !== id) {
+      socket.emit("transportCreated", { error: "Not allowed" });
+      return;
+    }
     let routerToUseIdx = await getProducerRouter();
     const { transport, params } = await createNewTransport(
       producerRouters[routerToUseIdx]?.router,
@@ -784,27 +981,39 @@ async function createTransport(socket, id) {
     producerTransports.set(id, {
       transport: transport,
       router: routerToUseIdx,
+      ownerSocketId: socket.id,
+      room: membership.room,
     });
     membersinProducerRouters[routerToUseIdx] += 1;
     socket.emit("transportCreated", { data: params });
   } catch (err) {
-    console.log(err);
+    logError("media.operation_failed", err);
   }
 }
 
-async function connectTransport(params, id, callback) {
+async function connectTransport(socket, params, id, callback) {
   try {
-    const ProducerTransport = producerTransports.get(id)?.transport;
+    const transportObj = producerTransports.get(id);
+    if (transportObj?.ownerSocketId !== socket.id) {
+      callback?.({ error: "Not allowed" });
+      return;
+    }
+    const ProducerTransport = transportObj?.transport;
     await ProducerTransport.connect({ dtlsParameters: params });
-    callback("ok");
+    callback?.("ok");
   } catch (err) {
-    console.log(err);
+    logError("media.operation_failed", err);
   }
 }
 
 async function produce(data, socket, callback) {
   try {
     const { kind, rtpParameters, id, room } = data;
+    const membership = getSocketMeeting(socket);
+    if (!isSocketRoomMember(socket, room) || membership?.peerId !== id) {
+      callback?.({ error: "Not allowed" });
+      return;
+    }
     const isScreenShare = data?.appData?.type === "screen";
     const roomObj = rooms.get(room);
     if (isScreenShare && roomObj?.screenShareAllowed === false) {
@@ -812,6 +1021,10 @@ async function produce(data, socket, callback) {
       return;
     }
     const ProducerTransportObj = producerTransports.get(id);
+    if (ProducerTransportObj?.ownerSocketId !== socket.id || ProducerTransportObj?.room !== room) {
+      callback?.({ error: "Not allowed" });
+      return;
+    }
     const ProducerTransport = ProducerTransportObj?.transport;
 
     const Producer = await ProducerTransport.produce({
@@ -823,7 +1036,7 @@ async function produce(data, socket, callback) {
     if (rooms.has(room)) {
       rooms.get(room)?.producers?.push({
         producerId: Producer.id,
-        peerId: id,
+        peerId: membership.peerId,
         room: room,
         kind: kind,
         screenShare: isScreenShare,
@@ -833,12 +1046,12 @@ async function produce(data, socket, callback) {
     producerObjects.set(Producer?.id, Producer);
     socket?.broadcast?.to(room)?.emit("newProducer", {
       producerId: Producer.id,
-      peerId: id,
+      peerId: membership.peerId,
       screenShare: isScreenShare,
     });
 
     if (kind === "audio" && roomObj?.transcriptRecordingEnabled !== false) {
-      createVoiceRecognizer(Producer, producerRouters?.[ProducerTransportObj?.router]?.router, room, id);
+      createVoiceRecognizer(Producer, producerRouters?.[ProducerTransportObj?.router]?.router, room, membership.peerId);
     }
 
     callback({
@@ -847,7 +1060,7 @@ async function produce(data, socket, callback) {
       screenShare: isScreenShare,
     });
   } catch (err) {
-    console.log(err);
+    logError("media.operation_failed", err);
     callback?.({ error: "Failed to publish media" });
   }
 }
@@ -895,18 +1108,7 @@ async function produce(data, socket, callback) {
         rtpConsumer.rtpParameters.encodings[0].ssrc
       ],
       {
-        env: {
-          ...process.env,
-          //For macos dev only
-          GI_TYPELIB_PATH: "/opt/homebrew/lib/girepository-1.0",
-          GST_PLUGIN_SCANNER:
-            "/opt/homebrew/libexec/gstreamer-1.0/gst-plugin-scanner",
-          GST_PLUGIN_PATH: "/opt/homebrew/lib/gstreamer-1.0",
-          DYLD_LIBRARY_PATH: "/opt/homebrew/lib",
-          LD_LIBRARY_PATH: "/opt/homebrew/lib",
-          PKG_CONFIG_PATH:
-            "/opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfig",
-        },
+        env: getTranscriptionProcessEnv(),
       }
     );
 
@@ -917,7 +1119,7 @@ async function produce(data, socket, callback) {
       try {
         rtpTransport?.close();
       } catch (err) {
-        console.error("rtpTransport close error", err);
+        logError("media.rtp_transport_close_failed", err);
       }
       removePort(remoteRtpPort);
       removePort(remoteRtcpPort);
@@ -942,23 +1144,24 @@ async function produce(data, socket, callback) {
                 sessionIndex: session?.sessionIndex,
                 meetingSessionId: session?.sessionId,
               }).catch((err) =>
-                console.error("Transcript save error", err)
+                logError("transcription.save_failed", err)
               );
             }
           }
 
-        } catch (e) {
-          console.log("Non-JSON:", line);
+        } catch (err) {
+          logError("transcription.invalid_process_output", err);
         }
       }
     });
 
     pythonProcess.stderr.on("data", (err) => {
-      console.log(err?.toString(), "err");
+      console.log(err?.toString(),'err')
+      logError("transcription.process_stderr");
     });
 
     pythonProcess.on("error", (err) => {
-      console.log(err, "an error ocurred");
+      logError("transcription.process_failed", err);
     });
 
     pythonProcess.on("close", () => {
@@ -993,6 +1196,17 @@ async function createConsumeTransport(data, socket) {
   let storageId;
   let param;
   try {
+    const membership = getSocketMeeting(socket);
+    const producer = data?.producer || {};
+    if (!isSocketRoomMember(socket, data?.room) || membership?.peerId !== data?.id) {
+      socket.emit("ConsumeTransportCreated", { error: "Not allowed" });
+      return;
+    }
+    const roomProducer = findRoomProducer(membership.room, producer?.producerId);
+    if (!roomProducer || roomProducer.peerId !== producer?.peerId) {
+      socket.emit("ConsumeTransportCreated", { error: "Producer not found" });
+      return;
+    }
     const routerIdx = await getConsumerRouter();
     const { transport, params } = await createNewTransport(
       consumerRouters[routerIdx]?.router,
@@ -1003,6 +1217,10 @@ async function createConsumeTransport(data, socket) {
     consumerTransports.set(storageId, {
       transport: transport,
       router: routerIdx,
+      ownerSocketId: socket.id,
+      ownerPeerId: membership.peerId,
+      room: membership.room,
+      producerId: producer?.producerId,
     });
     membersinConsumerRouters[routerIdx] += 1;
     if (consumers.has(data?.id)) {
@@ -1011,9 +1229,12 @@ async function createConsumeTransport(data, socket) {
       consumers.set(data?.id, [storageId]);
     }
     const originalRouterIdx = producerTransports.get(
-      data.producer?.peerId
+      producer?.peerId
     )?.router;
-    const filterPipedProducer = pipedProducers.get(data?.producer?.producerId);
+    if (originalRouterIdx === undefined || originalRouterIdx === null) {
+      throw new Error("Producer transport not found");
+    }
+    const filterPipedProducer = pipedProducers.get(producer?.producerId);
 
     if (filterPipedProducer) {
       const checkSameRouter = filterPipedProducer?.pipedRouters?.some(
@@ -1025,7 +1246,7 @@ async function createConsumeTransport(data, socket) {
             filterPipedProducer?.pipedRouters?.length - 1
           ]?.idx;
         const result = await pipeToRouter(
-          data?.producer?.producerId,
+          producer?.producerId,
           consumerRouters[idxToUse]?.router,
           consumerRouters[routerIdx]?.router
         );
@@ -1037,7 +1258,7 @@ async function createConsumeTransport(data, socket) {
           ...filterPipedProducer?.originalRouters,
           { type: "consumer", idx: idxToUse },
         ];
-        uniquePipedProducers[routerIdx].set(data?.producer?.producerId, {
+        uniquePipedProducers[routerIdx].set(producer?.producerId, {
           consumers: new Set(),
           pipeConsumer: result?.pipeConsumer,
           pipeProducer: result?.pipeProducer,
@@ -1045,17 +1266,17 @@ async function createConsumeTransport(data, socket) {
       }
     } else {
       const result = await pipeToRouter(
-        data?.producer?.producerId,
+        producer?.producerId,
         producerRouters[originalRouterIdx]?.router,
         consumerRouters[routerIdx]?.router
       );
-      pipedProducers.set(data?.producer?.producerId, {
+      pipedProducers.set(producer?.producerId, {
         pipedRouters: [{ type: "consumer", idx: routerIdx }],
-        peerId: data?.producer?.peerId,
-        producerId: data?.producer?.producerId,
+        peerId: producer?.peerId,
+        producerId: producer?.producerId,
         originalRouters: [{ type: "producer", idx: originalRouterIdx }],
       });
-      uniquePipedProducers[routerIdx].set(data?.producer?.producerId, {
+      uniquePipedProducers[routerIdx].set(producer?.producerId, {
         consumers: new Set(),
         pipeConsumer: result?.pipeConsumer,
         pipeProducer: result?.pipeProducer,
@@ -1065,6 +1286,8 @@ async function createConsumeTransport(data, socket) {
       data: params,
       storageId: storageId,
       ...data,
+      room: membership.room,
+      id: membership.peerId,
     });
   } catch (err) {
     if (
@@ -1078,7 +1301,7 @@ async function createConsumeTransport(data, socket) {
       });
       return;
     }
-    console.log(err);
+    logError("media.operation_failed", err);
   }
 }
 
@@ -1103,13 +1326,18 @@ async function getConsumerRouter() {
   return routerToReturnIdx;
 }
 
-async function connectConsumerTransport(data, callback) {
+async function connectConsumerTransport(data, socket, callback) {
   try {
-    const consumeTrans = consumerTransports.get(data?.storageId)?.transport;
+    const transportObj = consumerTransports.get(data?.storageId);
+    if (transportObj?.ownerSocketId !== socket.id) {
+      callback?.({ error: "Not allowed" });
+      return;
+    }
+    const consumeTrans = transportObj?.transport;
     await consumeTrans.connect({ dtlsParameters: data.dtlsParameters });
-    callback("ok");
+    callback?.("ok");
   } catch (err) {
-    console.log(err);
+    logError("media.operation_failed", err);
   }
 }
 
@@ -1124,6 +1352,21 @@ function getUserName(peerId) {
 async function startConsuming(data, socket) {
   try {
     const transportObj = consumerTransports.get(data?.storageId);
+    const membership = getSocketMeeting(socket);
+    if (
+      transportObj?.ownerSocketId !== socket.id ||
+      transportObj?.room !== membership?.room ||
+      transportObj?.ownerPeerId !== membership?.peerId ||
+      transportObj?.producerId !== data?.producerId
+    ) {
+      socket.emit("consumerCreated", { error: "Not allowed" });
+      return;
+    }
+    const roomProducer = findRoomProducer(membership.room, data?.producerId);
+    if (!roomProducer || roomProducer.peerId !== data?.peerId) {
+      socket.emit("consumerCreated", { error: "Producer not found" });
+      return;
+    }
     const consumeTrans = transportObj?.transport;
     const router = transportObj?.router;
     let consumer = await consumeTrans.consume({
@@ -1189,7 +1432,7 @@ async function startConsuming(data, socket) {
       unpipeProducers(router, data?.producerId, consumer?.id);
     });
   } catch (err) {
-    console.log(err);
+    logError("media.operation_failed", err);
   }
 }
 
@@ -1260,7 +1503,7 @@ function handleDisconnecting(socket) {
       } else {
         rooms.delete(room);
         waitingRooms.delete(room);
-        sessionManager.endSession(room).catch((err) => console.error("Session finalize error", err));
+        sessionManager.endSession(room).catch((err) => logError("session.finalize_failed", err));
       }
 
       socket.broadcast.to(room).emit("userLeft", user);
@@ -1308,3 +1551,10 @@ function unpipeProducer(item) {
 server.listen(5001, () => {
   console.log("Server Listening Successfully!");
 });
+
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    stopScheduledJobs();
+    server.close(() => process.exit(0));
+  });
+}

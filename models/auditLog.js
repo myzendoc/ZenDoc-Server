@@ -2,7 +2,9 @@ import mongoose from "mongoose";
 
 const auditLogSchema = new mongoose.Schema(
   {
+    eventId: { type: String, required: true, unique: true, sparse: true, index: true },
     actorUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true },
+    actorSubject: { type: String, index: true },
     actorRole: { type: String, enum: ["admin", "provider", "guest"], default: "guest", index: true },
     actorEmail: { type: String, index: true },
     actorName: { type: String },
@@ -17,6 +19,10 @@ const auditLogSchema = new mongoose.Schema(
     method: { type: String, index: true },
     path: { type: String, index: true },
     metadata: { type: Object },
+    // Tamper-evidence chain. Absent on records written before this was added.
+    sequence: { type: Number, index: true, sparse: true },
+    previousHash: { type: String },
+    entryHash: { type: String, index: true, sparse: true },
   },
   { timestamps: true }
 );

@@ -1,5 +1,6 @@
 import Stripe from "stripe";
 import { User } from "../models/user.js";
+import { publicError } from "../utils/errors.js";
 
 export const GROUP_SEAT_LIMIT = 10;
 
@@ -197,8 +198,8 @@ export async function ensureStripeCustomerForUser(user) {
 
 export async function createCheckoutSessionForUser({ user, planKey }) {
   const planDef = getPlanDef(planKey);
-  if (!planDef) throw new Error("Invalid plan");
-  if (planDef.key === "free") throw new Error("Free plan does not require checkout");
+  if (!planDef) throw publicError("Invalid plan");
+  if (planDef.key === "free") throw publicError("Free plan does not require checkout");
 
   const { stripe, customerId } = await ensureStripeCustomerForUser(user);
   const priceId = await resolvePriceIdForPlan(stripe, planDef);
@@ -291,6 +292,22 @@ async function setInactiveSubscriptionByCustomer(customerId = "") {
       },
     }
   );
+}
+
+// Deactivation stops billing at the end of the paid period rather than immediately:
+export async function setSubscriptionCancelAtPeriodEnd(userId, cancelAtPeriodEnd) {
+  const user = await User.findById(userId);
+  if (!user?.stripeSubscriptionId) return null;
+  if (!["active", "trialing", "past_due"].includes(String(user.subscriptionStatus || ""))) return null;
+  if (Boolean(user.subscriptionCancelAtPeriodEnd) === Boolean(cancelAtPeriodEnd)) return null;
+
+  const stripe = getStripeClient();
+  const subscription = await stripe.subscriptions.update(user.stripeSubscriptionId, {
+    cancel_at_period_end: Boolean(cancelAtPeriodEnd),
+  });
+  user.subscriptionCancelAtPeriodEnd = Boolean(subscription?.cancel_at_period_end);
+  await user.save();
+  return user.subscriptionCancelAtPeriodEnd;
 }
 
 export async function processStripeWebhook({ rawBody, signature }) {

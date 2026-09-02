@@ -90,6 +90,24 @@ export function parseBrowserFromUserAgent(userAgent = "") {
   return "Unknown";
 }
 
+export function getSocketAuditActor(socket, payload = {}) {
+  const auth = socket?.data?.auth;
+  const membership = socket?.data?.meeting;
+  const userAgent = String(socket?.handshake?.headers?.["user-agent"] || "");
+  const membershipRole = membership?.role === "admin" ? "admin" : membership?.role === "creator" ? "provider" : "guest";
+  return {
+    actorUserId: auth?.userId || membership?.userId || null,
+    actorRole: auth?.role || membershipRole,
+    actorEmail: auth?.actorEmail || null,
+    actorName: auth?.actorName || membership?.username || (payload?.username ? String(payload.username) : null),
+    ipAddress: getIpFromSocket(socket),
+    country: getCountryFromSocket(socket),
+    userAgent,
+    browser: parseBrowserFromUserAgent(userAgent),
+    method: "SOCKET",
+  };
+}
+
 export function getResourceTypeFromPath(path = "") {
   const cleaned = String(path || "").split("?")[0];
   const parts = cleaned.split("/").filter(Boolean);

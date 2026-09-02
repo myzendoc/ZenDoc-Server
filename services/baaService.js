@@ -3,6 +3,8 @@ import { sanitizeUser } from "./userService.js";
 import { createAuditLog } from "./auditLogService.js";
 import { generateBaaPdf, BAA_DOCUMENT_VERSION } from "../utils/baaPdf.js";
 import { sendBaaEmail } from "../utils/mailer.js";
+import { publicError } from "../utils/errors.js";
+import { logError } from "../utils/logging.js";
 
 function coerce(value) {
   return String(value ?? "").trim();
@@ -20,7 +22,7 @@ export async function recordBaaSignature(userId, fields = {}, context = {}) {
   const signatoryTitle = coerce(fields.signatoryTitle);
   const signature = coerce(fields.signature) || signatoryName;
   if (!organization || !signatoryName || !signatoryTitle || !signature) {
-    throw new Error("Organization, signatory name, signatory title and signature are required to sign the BAA");
+    throw publicError("Organization, signatory name, signatory title and signature are required to sign the BAA");
   }
 
   const signedAt = new Date();
@@ -57,8 +59,8 @@ export async function recordBaaSignature(userId, fields = {}, context = {}) {
     ipAddress: coerce(context.ipAddress),
     country: coerce(context.country),
     userAgent: coerce(context.userAgent),
-    metadata: { organization, signatoryName, signatoryTitle, documentVersion: BAA_DOCUMENT_VERSION },
-  }).catch(() => {});
+    metadata: { documentVersion: BAA_DOCUMENT_VERSION },
+  }).catch((err) => logError("audit.baa_signed_write_failed", err));
 
   return sanitizeUser(user);
 }
@@ -102,7 +104,7 @@ export async function maybeSendBaaEmail(userId, context = {}) {
     ipAddress: coerce(context.ipAddress),
     country: coerce(context.country),
     metadata: { documentVersion: user.baa.documentVersion },
-  }).catch(() => {});
+  }).catch((err) => logError("audit.baa_emailed_write_failed", err));
 
   return true;
 }

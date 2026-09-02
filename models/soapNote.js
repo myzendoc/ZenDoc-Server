@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { softDeletePlugin } from "./plugins/softDelete.js";
 
 const soapNoteSchema = new mongoose.Schema(
   {
@@ -12,5 +13,7 @@ const soapNoteSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+soapNoteSchema.plugin(softDeletePlugin);
 
 export const SoapNote = mongoose.model("SoapNote", soapNoteSchema);

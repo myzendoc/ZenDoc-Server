@@ -13,6 +13,32 @@ const userSchema = new mongoose.Schema(
     role: { type: String, enum: ["provider", "admin"], default: "provider" },
     onboardingComplete: { type: Boolean, default: false },
     verified: { type: Boolean, default: false },
+    status: { type: String, enum: ["active", "deactivated"], default: "active", index: true },
+    deactivatedAt: { type: Date },
+    deactivatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    deactivationReason: { type: String },
+    reactivatedAt: { type: Date },
+    mfa: {
+      enabled: { type: Boolean, default: false },
+      // Encrypted at rest via utils/fieldCipher.js, never returned by sanitizeUser.
+      secret: { type: String, select: false },
+      pendingSecret: { type: String, select: false },
+      confirmedAt: { type: Date },
+      lastUsedStep: { type: Number, select: false },
+      recoveryCodes: {
+        type: [
+          {
+            _id: false,
+            hash: { type: String, required: true },
+            usedAt: { type: Date, default: null },
+          },
+        ],
+        default: undefined,
+        select: false,
+      },
+    },
+    failedLoginAttempts: { type: Number, default: 0, select: false },
+    loginLockedUntil: { type: Date, select: false },
     otpCode: { type: String },
     otpExpires: { type: Date },
     resetPasswordToken: { type: String },

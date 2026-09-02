@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { softDeletePlugin } from "./plugins/softDelete.js";
 
 const meetingSessionSchema = new mongoose.Schema(
   {
@@ -16,5 +17,7 @@ const meetingSessionSchema = new mongoose.Schema(
 );
 
 meetingSessionSchema.index({ meetingId: 1, sessionIndex: 1 }, { unique: true });
+
+meetingSessionSchema.plugin(softDeletePlugin);
 
 export const MeetingSession = mongoose.model("MeetingSession", meetingSessionSchema);

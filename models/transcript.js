@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { softDeletePlugin } from "./plugins/softDelete.js";
 
 const transcriptSchema = new mongoose.Schema(
   {
@@ -10,5 +11,7 @@ const transcriptSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+transcriptSchema.plugin(softDeletePlugin);
 
 export const Transcript = mongoose.model("Transcript", transcriptSchema);

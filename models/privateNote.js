@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { softDeletePlugin } from "./plugins/softDelete.js";
 
 const privateNoteSchema = new mongoose.Schema(
   {
@@ -14,5 +15,7 @@ const privateNoteSchema = new mongoose.Schema(
 
 privateNoteSchema.index({ meetingId: 1, createdAt: -1 });
 privateNoteSchema.index({ meetingSessionId: 1, createdAt: -1 });
+
+privateNoteSchema.plugin(softDeletePlugin);
 
 export const PrivateNote = mongoose.model("PrivateNote", privateNoteSchema);

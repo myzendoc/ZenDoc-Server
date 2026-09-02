@@ -6,6 +6,7 @@ import { getMeeting, getMeetingById } from "./meetingService.js";
 import { getUserById } from "./userService.js";
 import { sendSessionEndedEmail, sendSoapReadyEmail } from "../utils/mailer.js";
 import { getUserEntitlements, isFreeSessionLimitExceeded } from "./entitlementService.js";
+import { logError } from "../utils/logging.js";
 
 class SessionManager {
   constructor() {
@@ -82,12 +83,12 @@ class SessionManager {
       try {
         process.kill("SIGKILL");
       } catch (err) {
-        console.error("Failed to kill process", err);
+        logError("session.process_kill_failed", err);
       }
       try {
         cleanup?.();
       } catch (err) {
-        console.error("Process cleanup error", err);
+        logError("session.process_cleanup_failed", err);
       }
     }
     room.processes.clear();
@@ -101,7 +102,7 @@ class SessionManager {
     try {
       cleanup?.();
     } catch (err) {
-      console.error("Process cleanup error", err);
+      logError("session.process_cleanup_failed", err);
     }
   }
 
@@ -189,7 +190,7 @@ class SessionManager {
       }
       await Promise.allSettled(jobs);
     } catch (err) {
-      console.error("session notification email failed", err?.message || err);
+      logError("session.notification_failed", err);
     }
   }
 

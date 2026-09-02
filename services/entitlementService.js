@@ -1,5 +1,5 @@
 import { getMeeting } from "./meetingService.js";
-import { getUserById } from "./userService.js";
+import { getUserById, isUserActive } from "./userService.js";
 
 export const FREE_SOAP_TRANSCRIPT_LIMIT = 3;
 
@@ -26,9 +26,10 @@ export async function getUserEntitlements(userId) {
   const user = await getUserById(id);
   let paid = isPaidSubscriber(user);
   let viaGroup = false;
+  // Inherited access dies with the owner's account, not just their subscription.
   if (!paid && user?.groupOwnerId) {
     const owner = await getUserById(user.groupOwnerId);
-    if (isPaidSubscriber(owner)) {
+    if (isUserActive(owner) && isPaidSubscriber(owner)) {
       paid = true;
       viaGroup = true;
     }

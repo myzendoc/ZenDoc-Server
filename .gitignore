@@ -1,7 +1,12 @@
 .env
+.env.*
+*.key
+*.pem
 node_modules
 *.zip
 dist
 .venv
 
 .*
+!.env.example
+docs/

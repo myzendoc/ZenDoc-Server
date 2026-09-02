@@ -1,4 +1,5 @@
-import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
+import { GoogleGenAI, Type } from "@google/genai";
+import { logError } from "../utils/logging.js";
 
 const MODEL = "gemini-2.5-flash";
 const SYSTEM_INSTRUCTION =
@@ -124,51 +125,70 @@ Include shared decision-making documentation where applicable.
 The output format of each section should be in Structured/Formatted HTML instead of plain text, using appropriate tags for clarity and readability.
 `
 
-let model;
-
 const soapSchema = {
   description: "SOAP note structure",
-  type: SchemaType.OBJECT,
+  type: Type.OBJECT,
   properties: {
-    subjective: { type: SchemaType.STRING, description: "Patient's subjective report" },
-    objective: { type: SchemaType.STRING, description: "Physician's objective findings" },
-    assessment: { type: SchemaType.STRING, description: "Diagnosis or analysis" },
-    plan: { type: SchemaType.STRING, description: "Treatment plan" },
+    subjective: { type: Type.STRING, description: "Patient's subjective report" },
+    objective: { type: Type.STRING, description: "Physician's objective findings" },
+    assessment: { type: Type.STRING, description: "Diagnosis or analysis" },
+    plan: { type: Type.STRING, description: "Treatment plan" },
   },
   required: ["subjective", "objective", "assessment", "plan"],
 };
 
-function getModel() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY not set");
+let client;
+
+// Both paths target aiplatform.googleapis.com (Agent Platform, formerly Vertex
+// AI), which is HIPAA-eligible under the Google Cloud BAA. There is no path to
+// the AI Studio endpoint, which is not covered.
+function getClient() {
+  if (client) return client;
+
+  const apiKey = String(process.env.GOOGLE_CLOUD_API_KEY || process.env.GOOGLE_API_KEY || "").trim();
+  const project = String(process.env.GOOGLE_CLOUD_PROJECT || "").trim();
+  const location = String(process.env.GOOGLE_CLOUD_LOCATION || "").trim() || "us-central1";
+
+  if (apiKey) {
+    client = new GoogleGenAI({ vertexai: true, apiKey, ...(project ? { project, location } : {}) });
+  } else if (project) {
+    client = new GoogleGenAI({ vertexai: true, project, location });
+  } else {
+    throw new Error(
+      "Set GOOGLE_API_KEY or GOOGLE_CLOUD_PROJECT; SOAP generation requires Agent Platform (see docs/HIPAA.md)"
+    );
   }
-  if (!model) {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    model = genAI.getGenerativeModel({ model: MODEL });
-  }
-  return model;
+  return client;
+}
+
+export function getSoapAuthMode() {
+  if (String(process.env.GOOGLE_CLOUD_API_KEY || process.env.GOOGLE_API_KEY || "").trim()) return "api_key";
+  if (String(process.env.GOOGLE_CLOUD_PROJECT || "").trim()) return "application_default_credentials";
+  return "unconfigured";
+}
+
+export function isSoapGenerationConfigured() {
+  return getSoapAuthMode() !== "unconfigured";
 }
 
 export async function generateSoaps(transcript) {
   if (!transcript) return null;
 
-  const generativeModel = getModel();
-
   try {
-      const result = await generativeModel.generateContent({
-        systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
-        contents: [{ role: "user", parts: [{ text: transcript }] }],
-        generationConfig: {
-        responseMimeType: "application/json", 
+    const response = await getClient().models.generateContent({
+      model: MODEL,
+      contents: [{ role: "user", parts: [{ text: transcript }] }],
+      config: {
+        systemInstruction: SYSTEM_INSTRUCTION,
+        responseMimeType: "application/json",
         responseSchema: soapSchema,
       },
-      });
-      const raw = result.response?.text()?.trim();
-      if (!raw) return null;
-      return JSON.parse(raw);
-    } catch (err) {
-      console.error("Gemini SOAP generation error", err);
-      return null
-    }
+    });
+    const raw = response?.text?.trim();
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (err) {
+    logError("soap.generation_failed", err);
+    return null;
+  }
 }

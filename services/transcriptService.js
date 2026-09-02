@@ -1,10 +1,35 @@
 import { Transcript } from "../models/transcript.js";
+import { decryptFieldOrNull, encryptField } from "../utils/fieldCipher.js";
+import { logError } from "../utils/logging.js";
+
+// Reads use .lean(), which bypasses getters, so encryption is explicit here.
+export const TRANSCRIPT_TEXT_CONTEXT = "Transcript.text";
+
+function readTranscriptText(doc) {
+  const text = decryptFieldOrNull(doc?.text, TRANSCRIPT_TEXT_CONTEXT);
+  if (text === null) {
+    logError("phi.transcript_decrypt_failed", new Error(`Transcript ${doc?._id} could not be decrypted`));
+    return "";
+  }
+  return text;
+}
+
+export function decryptTranscriptDoc(doc) {
+  if (!doc) return doc;
+  return { ...doc, text: readTranscriptText(doc) };
+}
 
 export async function saveFinalTranscript({ roomId, peerId, text, sessionIndex, meetingSessionId }) {
   if (!roomId || !text) return null;
   const trimmed = text.trim();
   if (!trimmed) return null;
-  return Transcript.create({ roomId, peerId, text: trimmed, sessionIndex, meetingSessionId });
+  return Transcript.create({
+    roomId,
+    peerId,
+    text: encryptField(trimmed, TRANSCRIPT_TEXT_CONTEXT),
+    sessionIndex,
+    meetingSessionId,
+  });
 }
 
 export async function getRoomTranscript(roomId, sessionIndex) {
@@ -14,7 +39,7 @@ export async function getRoomTranscript(roomId, sessionIndex) {
     filter.sessionIndex = sessionIndex;
   }
   const docs = await Transcript.find(filter).sort({ createdAt: 1 }).lean();
-  return docs.map((doc) => doc.text).join("\n");
+  return docs.map(readTranscriptText).filter(Boolean).join("\n");
 }
 
 export async function getTranscriptsByRoom(roomId, options = {}) {
@@ -26,7 +51,8 @@ export async function getTranscriptsByRoom(roomId, options = {}) {
   if (options.meetingSessionId) {
     filter.meetingSessionId = options.meetingSessionId;
   }
-  return Transcript.find(filter).sort({ createdAt: 1 }).lean();
+  const docs = await Transcript.find(filter).sort({ createdAt: 1 }).lean();
+  return docs.map(decryptTranscriptDoc);
 }
 
 export async function getParticipantsByRooms(roomIds = []) {

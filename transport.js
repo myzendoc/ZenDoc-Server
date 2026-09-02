@@ -1,4 +1,5 @@
 import { config } from "./config.js";
+import { logError } from "./utils/logging.js";
 
 export const createNewTransport=async(mediasoupRouter,webRtcServer)=>{
    const {initialAvailableOutgoingBitrate,maxIncomeBitrate} = config.mediasoup.webRtcTransport
@@ -18,7 +19,7 @@ export const createNewTransport=async(mediasoupRouter,webRtcServer)=>{
     transport.setMaxIncomingBitrate(maxIncomeBitrate)
     }
     catch(err){
-        console.error(err)
+        logError("media.incoming_bitrate_failed", err)
     }
    }
 

@@ -73,6 +73,42 @@ export async function sendPasswordResetEmail(email, resetLink) {
   });
 }
 
+export async function sendAuditChainAlertEmail({ email, problems = [], checked = 0 }) {
+  if (!email) return;
+  const rows = problems
+    .slice(0, 10)
+    .map((p) => `<tr><td style="padding:4px 8px 4px 0;">${escapeHtml(p.type)}</td><td style="padding:4px 0;">sequence ${escapeHtml(String(p.sequence ?? p.foundSequence ?? ""))}</td></tr>`)
+    .join("");
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; color: #0b1f6b; border: 1px solid #f0c2c2; border-radius: 8px; padding: 16px;">
+      <h2 style="margin: 0 0 8px; font-weight: 700; font-size: 20px; color: #b4232a;">Audit log integrity check failed</h2>
+      <p style="margin: 0 0 12px; color: #555;">${problems.length} problem(s) found across ${checked} chained entries. The audit log may have been altered.</p>
+      <table style="border-collapse: collapse; font-size: 14px; color: #333;">${rows}</table>
+      <p style="margin: 14px 0 0; color: #777;">Investigate who has database access and review recent administrative activity.</p>
+    </div>
+  `;
+  await sendTemplateEmail({ to: email, subject: "ZenDoc: audit log integrity check FAILED", html });
+}
+
+export async function sendBreakGlassAlertEmail({ email, actorEmail, targetEmail, reason, expiresAt }) {
+  if (!email) return;
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; color: #0b1f6b; border: 1px solid #f0c2c2; border-radius: 8px; padding: 16px;">
+      <h2 style="margin: 0 0 8px; font-weight: 700; font-size: 20px; color: #b4232a;">Emergency records access was opened</h2>
+      <p style="margin: 0 0 12px; color: #555;">An administrator opened emergency access to another user's clinical records.</p>
+      <table style="width: 100%; border-collapse: collapse; font-size: 14px; color: #333;">
+        <tr><td style="padding: 6px 0; color: #777;">Administrator</td><td style="padding: 6px 0;">${escapeHtml(actorEmail)}</td></tr>
+        <tr><td style="padding: 6px 0; color: #777;">Records of</td><td style="padding: 6px 0;">${escapeHtml(targetEmail)}</td></tr>
+        <tr><td style="padding: 6px 0; color: #777;">Expires</td><td style="padding: 6px 0;">${escapeHtml(new Date(expiresAt).toUTCString())}</td></tr>
+      </table>
+      <p style="margin: 14px 0 4px; color: #777;">Stated reason</p>
+      <div style="background: #f7f8fb; border: 1px solid #e2e6f0; border-radius: 8px; padding: 12px; color: #333;">${escapeHtml(reason)}</div>
+      <p style="margin: 14px 0 0; color: #777;">If this was not expected, revoke the grant from the admin dashboard and investigate.</p>
+    </div>
+  `;
+  await sendTemplateEmail({ to: email, subject: "ZenDoc: emergency records access opened", html });
+}
+
 export async function sendBaaEmail({ email, pdfBuffer, signatoryName }) {
   if (!email || !pdfBuffer) return;
   const safeName = escapeHtml(signatoryName || "there");

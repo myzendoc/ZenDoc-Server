@@ -1,6 +1,6 @@
 import crypto from "crypto";
 
-const DEFAULT_EXPIRY = 60 * 60 * 24 * 7;
+const DEFAULT_EXPIRY = 10 * 60;
 
 function base64UrlEncode(input) {
   return Buffer.from(input)
@@ -57,6 +57,6 @@ export function verifyToken(token, secret) {
     return null;
   }
   const payload = JSON.parse(base64UrlDecode(parts[1]));
-  if (payload?.exp && Math.floor(Date.now() / 1000) > payload.exp) return null;
+  if (payload?.exp && Math.floor(Date.now() / 1000) >= payload.exp) return null;
   return payload;
 }

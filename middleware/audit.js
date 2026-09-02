@@ -5,6 +5,7 @@ import {
   getResourceTypeFromPath,
   parseBrowserFromUserAgent,
 } from "../utils/audit.js";
+import { logError } from "../utils/logging.js";
 
 function getActorFromRequest(req) {
   const user = req.user || {};
@@ -15,29 +16,47 @@ function getActorFromRequest(req) {
   return { actorUserId, actorRole, actorEmail, actorName };
 }
 
-function getResourceId(req) {
-  return req.params?.id || req.params?.noteId || req.params?.roomId || null;
+export function getAuditResource(req, pathname = "") {
+  const params = req.params || {};
+  const parentResourceId = params.noteId && params.id ? String(params.id) : undefined;
+  const resourceId = params.noteId || params.userId || params.roomId || params.id || null;
+  let resourceType = getResourceTypeFromPath(pathname);
+  if (pathname.includes("/notes/meetings")) resourceType = "meeting";
+  else if (pathname.includes("/private-notes")) resourceType = "private_note";
+  else if (pathname.includes("/notes")) resourceType = "soap_note";
+  else if (pathname.includes("/dashboard/meetings")) resourceType = "meeting";
+  else if (pathname.includes("/group/members")) resourceType = "user";
+  else if (pathname.includes("/group/invites")) resourceType = "group_invite";
+  else if (pathname.includes("/baa/")) resourceType = "baa";
+  // Lifecycle and MFA events get their own resource types.
+  else if (pathname.includes("/admin/users")) resourceType = "user";
+  else if (pathname.includes("/auth/mfa")) resourceType = "mfa";
+  return { resourceId, resourceType, parentResourceId };
 }
 
-function shouldSkip(pathname = "") {
+export function shouldSkipAudit(pathname = "") {
   if (!pathname.startsWith("/api/")) return true;
   if (pathname === "/api/billing/webhook") return true;
+  if (pathname.split("?")[0] === "/api/auth/session") return true;
   return false;
 }
 
 export function auditHttpActivity(req, res, next) {
-  if (req.method === "OPTIONS" || shouldSkip(req.originalUrl || req.url || "")) {
+  if (req.method === "OPTIONS" || shouldSkipAudit(req.originalUrl || req.url || "")) {
     next();
     return;
   }
 
   const started = Date.now();
-  const pathname = (req.originalUrl || req.url || "").split("?")[0];
-
   res.on("finish", () => {
+    const rawPath = (req.originalUrl || req.url || "").split("?")[0];
+    const pathname = req.route?.path
+      ? `/api${req.route.path}`.replace(/\/+/g, "/")
+      : rawPath.replace(/(\/group\/invites\/)[^/]+/i, "$1:token");
     const userAgent = String(req.headers?.["user-agent"] || "");
     const status = res.statusCode >= 400 ? "failure" : "success";
     const actor = getActorFromRequest(req);
+    const resource = getAuditResource(req, pathname);
     const bodyKeys =
       req.body &&
       typeof req.body === "object" &&
@@ -48,8 +67,8 @@ export function auditHttpActivity(req, res, next) {
     createAuditLog({
       ...actor,
       action: `${req.method} ${pathname.replace(/^\/api/, "") || "/"}`,
-      resourceType: getResourceTypeFromPath(pathname),
-      resourceId: getResourceId(req),
+      resourceType: resource.resourceType,
+      resourceId: resource.resourceId,
       status,
       ipAddress: getIpFromRequest(req),
       country: getCountryFromRequest(req),
@@ -61,9 +80,10 @@ export function auditHttpActivity(req, res, next) {
         statusCode: res.statusCode,
         durationMs: Date.now() - started,
         bodyKeys,
+        parentResourceId: resource.parentResourceId,
       },
     }).catch((err) => {
-      console.error("audit http log failed", err?.message || err);
+      logError("audit.http_write_failed", err);
     });
   });
 

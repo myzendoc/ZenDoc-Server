@@ -1,5 +1,6 @@
 import mediasoup from 'mediasoup'
 import { config } from './config.js'
+import { logError } from './utils/logging.js'
 
 export const createWorker = async()=>{
   const worker = await mediasoup.createWorker({
@@ -10,7 +11,7 @@ export const createWorker = async()=>{
   })
 
   worker.on('died',()=>{
-    console.error("Mediasoup Stopped Working, exiting in 2s",worker.pid)
+    logError("media.worker_died", null, { pid: worker.pid })
     setTimeout(()=>{
      process.exit(1)
     },2000)

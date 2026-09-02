@@ -15,7 +15,10 @@ import { createSoapNote, getSoapNote, getSoapNotesByMeeting, getSoapNotesBySessi
 import { createPrivateNote, getPrivateNotesByMeeting, getPrivateNotesBySession } from "../services/privateNoteService.js";
 import { getTranscriptsByRoom } from "../services/transcriptService.js";
 import { FREE_SOAP_TRANSCRIPT_LIMIT, getUserEntitlements, isFreeSessionLimitExceeded } from "../services/entitlementService.js";
+import { isUserIdActive } from "../services/userService.js";
 import { sendPatientMeetingInviteEmail } from "../utils/mailer.js";
+import { sendErrorResponse } from "../utils/errors.js";
+import { canAccessMeeting, serializePublicMeeting } from "../utils/authorization.js";
 
 function computeStatus(session, meeting) {
   const now = new Date();
@@ -66,13 +69,6 @@ function serializeSessionRecord(record, req) {
     status,
     joinLink,
   };
-}
-
-function canAccessMeeting(meeting, user) {
-  if (!meeting || !user) return false;
-  if (user.role === "admin") return true;
-  if (meeting.createdBy && String(meeting.createdBy) === String(user._id)) return true;
-  return false;
 }
 
 async function getPlanLimitInfoForSession(session) {
@@ -173,14 +169,13 @@ export async function invitePatientToMeeting(req, res) {
 
     res.json({ message: `Invitation sent to ${email}` });
   } catch (err) {
-    res.status(502).json({ error: err?.message || "Failed to send invitation" });
+    sendErrorResponse(res, err, { fallback: "Failed to send invitation", status: 502, event: "meeting.invitation_email_failed" });
   }
 }
 
 export async function listDashboardMeetings(req, res) {
   try {
-    const includeAll = req.user?.role === "admin";
-    const sessions = await listMeetingSessionsWithContext(req.user?._id, includeAll);
+    const sessions = await listMeetingSessionsWithContext(req.user?._id);
     const enriched = sessions.map((item) => serializeSessionRecord(item, req));
     const active = enriched.filter((m) => m?.status !== "ended");
     const past = enriched.filter((m) => m?.status === "ended");
@@ -212,8 +207,7 @@ export async function getDashboardMeeting(req, res) {
 
 export async function listNotesMeetings(req, res) {
   try {
-    const includeAll = req.user?.role === "admin";
-    const sessions = await listMeetingSessionsWithContext(req.user?._id, includeAll);
+    const sessions = await listMeetingSessionsWithContext(req.user?._id);
     res.json({ meetings: sessions.map((s) => serializeSessionRecord(s, req)) });
   } catch {
     res.status(500).json({ error: "Failed to fetch meetings" });
@@ -385,7 +379,10 @@ export async function deleteNotesMeeting(req, res) {
       res.status(403).json({ error: "Forbidden" });
       return;
     }
-    await deleteMeetingSessionWithData(session._id);
+    await deleteMeetingSessionWithData(session._id, {
+      actorId: req.user?._id,
+      reason: "Deleted by provider",
+    });
     res.json({ status: "ok" });
   } catch {
     res.status(400).json({ error: "Failed to delete meeting session" });
@@ -520,9 +517,11 @@ export async function getPublicMeeting(req, res) {
       res.status(404).json({ error: "Not found" });
       return;
     }
-    res.json({
-      meeting: serializeSessionRecord({ ...meeting, meeting }, req),
-    });
+    if (meeting.createdBy && !(await isUserIdActive(meeting.createdBy))) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    res.json({ meeting: serializePublicMeeting(meeting) });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch meeting" });
   }

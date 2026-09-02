@@ -3,6 +3,8 @@ import { User } from "../models/user.js";
 import { GroupInvite } from "../models/groupInvite.js";
 import { GROUP_SEAT_LIMIT, isGroupPlanKey } from "./billingService.js";
 import { sendTeamInviteEmail } from "../utils/mailer.js";
+import { publicError } from "../utils/errors.js";
+import { deactivateUser, reactivateUser } from "./userService.js";
 
 const INVITE_TTL_DAYS = 7;
 
@@ -26,7 +28,13 @@ function isGroupOwner(user) {
 }
 
 function publicUser(user) {
-  return { id: String(user._id), name: displayNameFor(user), email: user.email };
+  return {
+    id: String(user._id),
+    name: displayNameFor(user),
+    email: user.email,
+    status: user.status || "active",
+    isActive: user.status !== "deactivated",
+  };
 }
 
 async function countSeatsUsed(ownerId, options = {}) {
@@ -34,8 +42,9 @@ async function countSeatsUsed(ownerId, options = {}) {
   if (options.excludeInviteId) {
     inviteFilter._id = { $ne: options.excludeInviteId };
   }
+  // A deactivated member holds no access, so they must not hold a seat either.
   const [memberCount, inviteCount] = await Promise.all([
-    User.countDocuments({ groupOwnerId: ownerId }),
+    User.countDocuments({ groupOwnerId: ownerId, status: { $ne: "deactivated" } }),
     GroupInvite.countDocuments(inviteFilter),
   ]);
   return 1 + memberCount + inviteCount;
@@ -73,24 +82,24 @@ export async function getGroupForUser(userId) {
 
 export async function inviteMember(ownerUserId, rawEmail, clientBaseUrl) {
   const owner = await User.findById(ownerUserId);
-  if (!isGroupOwner(owner)) throw new Error("Start a team plan before inviting members");
+  if (!isGroupOwner(owner)) throw publicError("Start a team plan before inviting members");
 
   const email = String(rawEmail || "").trim().toLowerCase();
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter a valid email address");
-  if (email === String(owner.email).toLowerCase()) throw new Error("You are already on this team");
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw publicError("Enter a valid email address");
+  if (email === String(owner.email).toLowerCase()) throw publicError("You are already on this team");
 
   const existingMember = await User.findOne({ email, groupOwnerId: owner._id });
-  if (existingMember) throw new Error("That person is already on your team");
+  if (existingMember) throw publicError("That person is already on your team");
 
   const existingUser = await User.findOne({ email });
-  if (existingUser?.groupOwnerId) throw new Error("That person is already on another team");
-  if (isGroupOwner(existingUser)) throw new Error("That person already manages their own team");
+  if (existingUser?.groupOwnerId) throw publicError("That person is already on another team");
+  if (isGroupOwner(existingUser)) throw publicError("That person already manages their own team");
 
   const existingInvite = await GroupInvite.findOne({ ownerId: owner._id, email, status: "pending" });
-  if (existingInvite) throw new Error("An invitation is already pending for that email");
+  if (existingInvite) throw publicError("An invitation is already pending for that email");
 
   const seatsUsed = await countSeatsUsed(owner._id);
-  if (seatsUsed >= GROUP_SEAT_LIMIT) throw new Error(`Your team is full (max ${GROUP_SEAT_LIMIT} members)`);
+  if (seatsUsed >= GROUP_SEAT_LIMIT) throw publicError(`Your team is full (max ${GROUP_SEAT_LIMIT} members)`);
 
   const token = crypto.randomBytes(24).toString("hex");
   const invite = await GroupInvite.create({
@@ -124,33 +133,33 @@ export async function getInviteByToken(token) {
 
 export async function acceptInvite(token, userId) {
   const invite = await GroupInvite.findOne({ token: String(token || "") });
-  if (!invite) throw new Error("This invitation is invalid or has expired");
-  if (invite.status === "revoked") throw new Error("This invitation has been revoked");
-  if (invite.expiresAt && invite.expiresAt.getTime() < Date.now()) throw new Error("This invitation has expired");
+  if (!invite) throw publicError("This invitation is invalid or has expired");
+  if (invite.status === "revoked") throw publicError("This invitation has been revoked");
+  if (invite.expiresAt && invite.expiresAt.getTime() < Date.now()) throw publicError("This invitation has expired");
 
   const user = await User.findById(userId);
-  if (!user) throw new Error("User not found");
+  if (!user) throw publicError("User not found");
   if (String(user.email).toLowerCase() !== invite.email) {
-    throw new Error("This invitation was sent to a different email address");
+    throw publicError("This invitation was sent to a different email address");
   }
-  if (isGroupOwner(user)) throw new Error("You already manage your own team");
+  if (isGroupOwner(user)) throw publicError("You already manage your own team");
   if (user.groupOwnerId && String(user.groupOwnerId) !== String(invite.ownerId)) {
-    throw new Error("You are already on another team");
+    throw publicError("You are already on another team");
   }
 
   const owner = await User.findById(invite.ownerId);
-  if (!owner || !isGroupOwner(owner)) throw new Error("This team is no longer active");
+  if (!owner || !isGroupOwner(owner)) throw publicError("This team is no longer active");
 
   if (invite.status === "accepted") {
     if (String(user.groupOwnerId || "") === String(invite.ownerId)) {
       return { owner: publicUser(owner), alreadyAccepted: true };
     }
-    throw new Error("This invitation has already been accepted");
+    throw publicError("This invitation has already been accepted");
   }
 
   if (!user.groupOwnerId) {
     const seatsUsed = await countSeatsUsed(owner._id, { excludeInviteId: invite._id });
-    if (seatsUsed >= GROUP_SEAT_LIMIT) throw new Error("This team is full");
+    if (seatsUsed >= GROUP_SEAT_LIMIT) throw publicError("This team is full");
     user.groupOwnerId = owner._id;
     await user.save();
   }
@@ -163,21 +172,44 @@ export async function acceptInvite(token, userId) {
 
 export async function removeMember(ownerUserId, memberUserId) {
   const owner = await User.findById(ownerUserId);
-  if (!isGroupOwner(owner)) throw new Error("You do not manage a team");
+  if (!isGroupOwner(owner)) throw publicError("You do not manage a team");
   const member = await User.findById(memberUserId);
   if (!member || String(member.groupOwnerId || "") !== String(owner._id)) {
-    throw new Error("That member is not on your team");
+    throw publicError("That member is not on your team");
   }
   member.groupOwnerId = undefined;
   await member.save();
   return { removed: String(member._id) };
 }
 
+// Removal only detaches; this cuts PHI access entirely.
+export async function deactivateMember(ownerUserId, memberUserId, reason) {
+  const owner = await User.findById(ownerUserId);
+  if (!isGroupOwner(owner)) throw publicError("You do not manage a team");
+  const member = await User.findById(memberUserId);
+  if (!member || String(member.groupOwnerId || "") !== String(owner._id)) {
+    throw publicError("That member is not on your team");
+  }
+  const user = await deactivateUser(member._id, { actorId: owner._id, reason });
+  return { user, deactivated: String(member._id) };
+}
+
+export async function reactivateMember(ownerUserId, memberUserId) {
+  const owner = await User.findById(ownerUserId);
+  if (!isGroupOwner(owner)) throw publicError("You do not manage a team");
+  const member = await User.findById(memberUserId);
+  if (!member || String(member.groupOwnerId || "") !== String(owner._id)) {
+    throw publicError("That member is not on your team");
+  }
+  const user = await reactivateUser(member._id, { actorId: owner._id });
+  return { user, reactivated: String(member._id) };
+}
+
 export async function revokeInvite(ownerUserId, inviteId) {
   const owner = await User.findById(ownerUserId);
-  if (!isGroupOwner(owner)) throw new Error("You do not manage a team");
+  if (!isGroupOwner(owner)) throw publicError("You do not manage a team");
   const invite = await GroupInvite.findOne({ _id: inviteId, ownerId: owner._id, status: "pending" });
-  if (!invite) throw new Error("Invitation not found");
+  if (!invite) throw publicError("Invitation not found");
   invite.status = "revoked";
   await invite.save();
   return { revoked: String(invite._id) };
@@ -185,8 +217,8 @@ export async function revokeInvite(ownerUserId, inviteId) {
 
 export async function leaveGroup(userId) {
   const user = await User.findById(userId);
-  if (!user) throw new Error("User not found");
-  if (!user.groupOwnerId) throw new Error("You are not on a team");
+  if (!user) throw publicError("User not found");
+  if (!user.groupOwnerId) throw publicError("You are not on a team");
   user.groupOwnerId = undefined;
   await user.save();
   return { left: true };

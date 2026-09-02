@@ -4,6 +4,24 @@ import { User } from "../models/user.js";
 import { Transcript } from "../models/transcript.js";
 import { SoapNote } from "../models/soapNote.js";
 import { PrivateNote } from "../models/privateNote.js";
+import { decryptMeeting, MEETING_TITLE_CONTEXT } from "./meetingService.js";
+import { decryptFieldOrNull, encryptField } from "../utils/fieldCipher.js";
+
+const SAFE_CREATOR_FIELDS = "_id firstName lastName displayName email";
+
+// Titles carry patient names, so treated as PHI.
+export const SESSION_TITLE_CONTEXT = "MeetingSession.title";
+
+export function decryptSession(session) {
+  if (!session) return session;
+  const plain = typeof session.toObject === "function" ? session.toObject() : { ...session };
+  if (plain.title) plain.title = decryptFieldOrNull(plain.title, SESSION_TITLE_CONTEXT) ?? "";
+  return plain;
+}
+
+export function encryptSessionTitle(title) {
+  return title ? encryptField(title, SESSION_TITLE_CONTEXT) : title;
+}
 
 export async function startMeetingSession({ roomId, creatorPeerId, creatorSocketId }) {
   if (!roomId) return null;
@@ -22,10 +40,13 @@ export async function startMeetingSession({ roomId, creatorPeerId, creatorSocket
   if (creatorSocketId !== undefined) meeting.creatorSocketId = creatorSocketId;
   await meeting.save();
 
+  // Re-encrypt under the session's own field context, not copied as ciphertext.
   const session = await MeetingSession.create({
     meetingId: meeting._id,
     roomId,
-    title: meeting.title || "Meeting",
+    title: encryptSessionTitle(
+      (meeting.title && decryptFieldOrNull(meeting.title, MEETING_TITLE_CONTEXT)) || "Meeting"
+    ),
     sessionIndex: nextIndex,
     startedAt: now,
     creatorPeerId: creatorPeerId || meeting.creatorPeerId,
@@ -34,8 +55,8 @@ export async function startMeetingSession({ roomId, creatorPeerId, creatorSocket
   });
 
   return {
-    meeting: meeting.toObject(),
-    session: session.toObject(),
+    meeting: decryptMeeting(meeting),
+    session: decryptSession(session),
   };
 }
 
@@ -62,7 +83,7 @@ export async function endMeetingSession({ roomId, meetingSessionId, sessionIndex
     $set: { endedAt: session.endedAt, currentSessionIndex: null },
   });
 
-  return session.toObject();
+  return decryptSession(session);
 }
 
 export async function listMeetingSessionsWithContext(userId, includeAll = false) {
@@ -75,7 +96,9 @@ export async function listMeetingSessionsWithContext(userId, includeAll = false)
   const sessions = await MeetingSession.find({ meetingId: { $in: meetingIds } }).sort({ startedAt: -1, createdAt: -1 }).lean();
 
   const creatorIds = meetings.map((m) => m.createdBy).filter(Boolean);
-  const creators = creatorIds.length ? await User.find({ _id: { $in: creatorIds } }).lean() : [];
+  const creators = creatorIds.length
+    ? await User.find({ _id: { $in: creatorIds } }).select(SAFE_CREATOR_FIELDS).lean()
+    : [];
   const creatorById = new Map(creators.map((u) => [String(u._id), u]));
 
   return sessions
@@ -83,7 +106,7 @@ export async function listMeetingSessionsWithContext(userId, includeAll = false)
       const meeting = meetingById.get(String(session.meetingId));
       if (!meeting) return null;
       const creator = meeting.createdBy ? creatorById.get(String(meeting.createdBy)) || null : null;
-      return { ...session, meeting, creator };
+      return { ...decryptSession(session), meeting: decryptMeeting(meeting), creator };
     })
     .filter(Boolean);
 }
@@ -94,37 +117,47 @@ export async function getMeetingSessionWithContext(id) {
   if (!session) return null;
   const meeting = await Meeting.findById(session.meetingId).lean();
   if (!meeting) return null;
-  const creator = meeting.createdBy ? await User.findById(meeting.createdBy).lean() : null;
-  return { ...session, meeting, creator };
+  const creator = meeting.createdBy
+    ? await User.findById(meeting.createdBy).select(SAFE_CREATOR_FIELDS).lean()
+    : null;
+  return { ...decryptSession(session), meeting: decryptMeeting(meeting), creator };
 }
 
 export async function listMeetingSessionsForMeeting(meetingId) {
   if (!meetingId) return [];
-  return MeetingSession.find({ meetingId }).sort({ sessionIndex: -1 }).lean();
+  const sessions = await MeetingSession.find({ meetingId }).sort({ sessionIndex: -1 }).lean();
+  return sessions.map(decryptSession);
 }
 
 export async function getLatestMeetingSessionForRoom(roomId) {
   if (!roomId) return null;
-  return MeetingSession.findOne({ roomId }).sort({ sessionIndex: -1 }).lean();
+  return decryptSession(await MeetingSession.findOne({ roomId }).sort({ sessionIndex: -1 }).lean());
 }
 
 export async function renameMeetingSession(sessionId, title) {
   if (!sessionId) return null;
   const nextTitle = String(title || "").trim();
   if (!nextTitle) throw new Error("Session title is required");
-  return MeetingSession.findByIdAndUpdate(sessionId, { $set: { title: nextTitle } }, { new: true }).lean();
+  const session = await MeetingSession.findByIdAndUpdate(
+    sessionId,
+    { $set: { title: encryptSessionTitle(nextTitle) } },
+    { new: true }
+  ).lean();
+  return decryptSession(session);
 }
 
-export async function deleteMeetingSessionWithData(sessionId) {
+// Soft delete:
+export async function deleteMeetingSessionWithData(sessionId, { actorId, reason } = {}) {
   if (!sessionId) return null;
   const session = await MeetingSession.findById(sessionId).lean();
   if (!session) return null;
 
+  const audit = { actorId, reason: reason || "Deleted by provider" };
   await Promise.all([
-    Transcript.deleteMany({ meetingSessionId: session._id }),
-    SoapNote.deleteMany({ meetingSessionId: session._id }),
-    PrivateNote.deleteMany({ meetingSessionId: session._id }),
-    MeetingSession.deleteOne({ _id: session._id }),
+    Transcript.softDelete({ meetingSessionId: session._id }, audit),
+    SoapNote.softDelete({ meetingSessionId: session._id }, audit),
+    PrivateNote.softDelete({ meetingSessionId: session._id }, audit),
+    MeetingSession.softDelete({ _id: session._id }, audit),
   ]);
 
   const hasRemainingSessions = await MeetingSession.exists({ meetingId: session.meetingId });

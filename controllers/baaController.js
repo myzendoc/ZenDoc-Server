@@ -1,5 +1,6 @@
 import { getUserById } from "../services/userService.js";
 import { generateBaaPdf } from "../utils/baaPdf.js";
+import { sendErrorResponse } from "../utils/errors.js";
 
 export async function downloadBaaDocument(req, res) {
   try {
@@ -26,6 +27,6 @@ export async function downloadBaaDocument(req, res) {
     res.setHeader("Content-Length", pdfBuffer.length);
     res.send(pdfBuffer);
   } catch (err) {
-    res.status(500).json({ error: err.message || "Failed to generate BAA document" });
+    sendErrorResponse(res, err, { fallback: "Failed to generate BAA document", event: "baa.document_failed" });
   }
 }

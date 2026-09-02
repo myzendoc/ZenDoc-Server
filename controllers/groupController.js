@@ -6,7 +6,10 @@ import {
   revokeInvite,
   leaveGroup,
   getInviteByToken,
+  deactivateMember,
+  reactivateMember,
 } from "../services/groupService.js";
+import { sendErrorResponse } from "../utils/errors.js";
 
 function getClientBaseUrl(req) {
   const envBase = String(process.env.CLIENT_APP_URL || "").trim().replace(/\/$/, "");
@@ -21,7 +24,7 @@ export async function getGroup(req, res) {
     const group = await getGroupForUser(req.user?._id);
     res.json(group);
   } catch (err) {
-    res.status(400).json({ error: err.message || "Failed to load team" });
+    sendErrorResponse(res, err, { fallback: "Failed to load team", status: 400, event: "group.load_failed" });
   }
 }
 
@@ -30,7 +33,7 @@ export async function postInvite(req, res) {
     const invite = await inviteMember(req.user?._id, req.body?.email, getClientBaseUrl(req));
     res.json({ invite });
   } catch (err) {
-    res.status(400).json({ error: err.message || "Failed to send invitation" });
+    sendErrorResponse(res, err, { fallback: "Failed to send invitation", status: 400, event: "group.invite_failed" });
   }
 }
 
@@ -43,7 +46,7 @@ export async function lookupInvite(req, res) {
     }
     res.json(invite);
   } catch (err) {
-    res.status(400).json({ error: err.message || "Failed to load invitation" });
+    sendErrorResponse(res, err, { fallback: "Failed to load invitation", status: 400, event: "group.invite_lookup_failed" });
   }
 }
 
@@ -52,7 +55,7 @@ export async function postAcceptInvite(req, res) {
     const result = await acceptInvite(req.body?.token, req.user?._id);
     res.json(result);
   } catch (err) {
-    res.status(400).json({ error: err.message || "Failed to accept invitation" });
+    sendErrorResponse(res, err, { fallback: "Failed to accept invitation", status: 400, event: "group.invite_accept_failed" });
   }
 }
 
@@ -61,7 +64,25 @@ export async function deleteMember(req, res) {
     const result = await removeMember(req.user?._id, req.params?.userId);
     res.json(result);
   } catch (err) {
-    res.status(400).json({ error: err.message || "Failed to remove member" });
+    sendErrorResponse(res, err, { fallback: "Failed to remove member", status: 400, event: "group.member_remove_failed" });
+  }
+}
+
+export async function postDeactivateMember(req, res) {
+  try {
+    const result = await deactivateMember(req.user?._id, req.params?.userId, req.body?.reason);
+    res.json(result);
+  } catch (err) {
+    sendErrorResponse(res, err, { fallback: "Failed to deactivate member", status: 400, event: "group.member_deactivate_failed" });
+  }
+}
+
+export async function postReactivateMember(req, res) {
+  try {
+    const result = await reactivateMember(req.user?._id, req.params?.userId);
+    res.json(result);
+  } catch (err) {
+    sendErrorResponse(res, err, { fallback: "Failed to reactivate member", status: 400, event: "group.member_reactivate_failed" });
   }
 }
 
@@ -70,7 +91,7 @@ export async function deleteInvite(req, res) {
     const result = await revokeInvite(req.user?._id, req.params?.id);
     res.json(result);
   } catch (err) {
-    res.status(400).json({ error: err.message || "Failed to revoke invitation" });
+    sendErrorResponse(res, err, { fallback: "Failed to revoke invitation", status: 400, event: "group.invite_revoke_failed" });
   }
 }
 
@@ -79,6 +100,6 @@ export async function postLeave(req, res) {
     const result = await leaveGroup(req.user?._id);
     res.json(result);
   } catch (err) {
-    res.status(400).json({ error: err.message || "Failed to leave team" });
+    sendErrorResponse(res, err, { fallback: "Failed to leave team", status: 400, event: "group.leave_failed" });
   }
 }

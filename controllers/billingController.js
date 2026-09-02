@@ -6,6 +6,8 @@ import {
   processStripeWebhook,
 } from "../services/billingService.js";
 import { getUserById } from "../services/userService.js";
+import { sendErrorResponse } from "../utils/errors.js";
+import { logError } from "../utils/logging.js";
 
 export async function listBillingPlans(req, res) {
   try {
@@ -26,7 +28,7 @@ export async function createCheckoutSession(req, res) {
     const result = await createCheckoutSessionForUser({ user, planKey });
     res.json(result);
   } catch (err) {
-    res.status(400).json({ error: err.message || "Failed to create checkout session" });
+    sendErrorResponse(res, err, { fallback: "Failed to create checkout session", status: 400, event: "billing.checkout_failed" });
   }
 }
 
@@ -37,13 +39,11 @@ export async function stripeWebhook(req, res) {
     const result = await processStripeWebhook({ rawBody, signature });
     res.json(result);
   } catch (err) {
-    console.error("stripe webhook error", {
-      message: err?.message || err,
+    logError("billing.webhook_failed", err, {
       hasSignature: Boolean(req.headers["stripe-signature"]),
-      contentType: req.headers["content-type"],
       bodyType: Buffer.isBuffer(req.body) ? "buffer" : typeof req.body,
     });
-    res.status(400).json({ error: err.message || "Invalid webhook" });
+    res.status(400).json({ error: "Invalid webhook" });
   }
 }
 
@@ -70,6 +70,6 @@ export async function createPortalSession(req, res) {
     const session = await createPortalSessionForUser(user);
     res.json(session);
   } catch (err) {
-    res.status(400).json({ error: err.message || "Failed to create portal session" });
+    sendErrorResponse(res, err, { fallback: "Failed to create portal session", status: 400, event: "billing.portal_failed" });
   }
 }
