@@ -6,6 +6,7 @@ const authSessionSchema = new mongoose.Schema(
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true, sparse: true },
     role: { type: String, enum: ["provider", "admin"], required: true },
     refreshTokenHash: { type: String, required: true, select: false },
+    trusted: { type: Boolean, default: false },
     lastActivityAt: { type: Date, required: true, index: true },
     absoluteExpiresAt: { type: Date, required: true, index: { expires: 0 } },
     revokedAt: { type: Date },

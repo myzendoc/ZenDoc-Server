@@ -1,6 +1,6 @@
 import express from "express";
 import passport, { isGoogleAuthEnabled } from "../config/passport.js";
-import { signup, login, logout, me, refreshSession, touchSession, updateProfile, sendOtp, verifyOtp, forgotPassword, resetPassword, googleCallback, googleFailure, changePassword, changeEmail, verifyEmailChange, disconnectGoogle, verifyMfa, getMfa, startMfaEnrollment, confirmMfa, turnOffMfa, refreshRecoveryCodes } from "../controllers/authController.js";
+import { signup, login, logout, me, refreshSession, touchSession, updateProfile, sendOtp, verifyOtp, forgotPassword, resetPassword, googleCallback, googleFailure, changePassword, changeEmail, verifyEmailChange, disconnectGoogle, verifyMfa, getMfa, startMfaEnrollment, confirmMfa, turnOffMfa, refreshRecoveryCodes, getTrustedDevices, deleteTrustedDevice, deleteAllTrustedDevices } from "../controllers/authController.js";
 import { downloadBaaDocument } from "../controllers/baaController.js";
 import { getGroup, postInvite, lookupInvite, postAcceptInvite, deleteMember, deleteInvite, postLeave, postDeactivateMember, postReactivateMember } from "../controllers/groupController.js";
 import {
@@ -102,6 +102,9 @@ router.post("/auth/mfa/enroll", requireAuth, startMfaEnrollment);
 router.post("/auth/mfa/confirm", requireAuth, mfaVerifyRateLimit, confirmMfa);
 router.post("/auth/mfa/disable", requireAuth, mfaVerifyRateLimit, turnOffMfa);
 router.post("/auth/mfa/recovery-codes", requireAuth, mfaVerifyRateLimit, refreshRecoveryCodes);
+router.get("/auth/devices", requireAuth, getTrustedDevices);
+router.delete("/auth/devices/:deviceId", requireAuth, deleteTrustedDevice);
+router.delete("/auth/devices", requireAuth, deleteAllTrustedDevices);
 router.get("/baa/document", requireAuth, downloadBaaDocument);
 router.get("/group", requireAuth, getGroup);
 router.post("/group/invites", requireAuth, invitationRateLimit, postInvite);

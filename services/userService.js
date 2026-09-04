@@ -8,6 +8,7 @@ import { publicError } from "../utils/errors.js";
 import { revokeAllSessionsForSubject } from "./authSessionService.js";
 import { disconnectUserSockets } from "./sessionRevocation.js";
 import { setSubscriptionCancelAtPeriodEnd } from "./billingService.js";
+import { revokeAllTrustedDevices } from "./trustedDeviceService.js";
 import { logError } from "../utils/logging.js";
 import { decryptField, encryptField } from "../utils/fieldCipher.js";
 import {
@@ -396,6 +397,7 @@ export async function resetPasswordWithToken(token, password) {
   user.resetPasswordExpires = undefined;
   await user.save();
   await revokeAllSessionsForSubject(user.id);
+  await revokeAllTrustedDevices(user._id);
   return sanitizeUser(user);
 }
 
@@ -414,6 +416,7 @@ export async function changePassword(userId, currentPassword, newPassword) {
   user.password = hashPassword(next);
   await user.save();
   await revokeAllSessionsForSubject(user.id);
+  await revokeAllTrustedDevices(user._id);
   return sanitizeUser(user);
 }
 
@@ -610,6 +613,7 @@ export async function disableMfa(userId, { password, code } = {}) {
       },
     }
   );
+  await revokeAllTrustedDevices(userId);
   return getMfaStatus(userId);
 }
 
@@ -656,6 +660,7 @@ export async function deactivateUser(targetUserId, { actorId, reason = "" } = {}
 
   // Access must stop now, not when the access token expires.
   await revokeAllSessionsForSubject(target.id);
+  await revokeAllTrustedDevices(target._id);
   await disconnectUserSockets(target.id, "account_deactivated");
   // Billing is best-effort: a Stripe outage must not block revoking access.
   await setSubscriptionCancelAtPeriodEnd(target.id, true).catch((err) =>

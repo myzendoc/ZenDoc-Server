@@ -23,17 +23,27 @@ import {
   verifyMfaChallenge,
 } from "../services/userService.js";
 import { sendOtpEmail, sendPasswordResetEmail } from "../utils/mailer.js";
+import {
+  findValidTrustedDevice,
+  issueTrustedDevice,
+  listTrustedDevices,
+  revokeTrustedDevice,
+  revokeAllTrustedDevices,
+} from "../services/trustedDeviceService.js";
 import { recordBaaSignature, maybeSendBaaEmail } from "../services/baaService.js";
 import { getIpFromRequest, getCountryFromRequest } from "../utils/audit.js";
 import { sendErrorResponse } from "../utils/errors.js";
 import { logError } from "../utils/logging.js";
 import {
   clearAuthCookies,
+  clearDeviceCookie,
   clearMfaChallengeCookie,
   establishAuthSession,
   issueMfaChallenge,
   readAccessPayload,
+  readDeviceCookie,
   readMfaChallenge,
+  setDeviceCookie,
   refreshAuthSession,
   renewAccessCookie,
   revokeSessionFromCookies,
@@ -75,7 +85,8 @@ export async function signup(req, res) {
 
 export async function login(req, res) {
   try {
-    const { email, password } = req.body || {};
+    const { email, password, rememberDevice } = req.body || {};
+    const remember = Boolean(rememberDevice);
     const result = await authenticateUser(email, password);
     if (!result?.user?.verified) {
       const code = await issueOtpForUser(result.user?._id);
@@ -84,12 +95,22 @@ export async function login(req, res) {
       return;
     }
     if (result.mfaRequired) {
+      // A previously trusted device satisfies the second factor on its own.
+      const device = await findValidTrustedDevice(
+        readDeviceCookie(req.headers?.cookie || ""),
+        result.user?._id
+      );
+      if (device) {
+        await establishAuthSession(res, result.user, { trusted: true });
+        res.json({ user: result.user, trustedDevice: true });
+        return;
+      }
       // No auth cookies until the second factor clears.
-      issueMfaChallenge(res, result.user);
+      issueMfaChallenge(res, result.user, { remember });
       res.json({ requiresMfa: true, email: result.user?.email });
       return;
     }
-    await establishAuthSession(res, result.user);
+    await establishAuthSession(res, result.user, { trusted: remember });
     res.json({ user: result.user });
   } catch (err) {
     sendErrorResponse(res, err, { fallback: "Failed to login", status: 400, event: "auth.login_failed" });
@@ -107,8 +128,17 @@ export async function verifyMfa(req, res) {
     const { code } = req.body || {};
     const result = await verifyMfaChallenge(challenge.sub, code);
     clearMfaChallengeCookie(res);
-    await establishAuthSession(res, result.user);
-    res.json({ user: result.user });
+
+    const remember = Boolean(challenge.remember);
+    if (remember) {
+      const { token, expiresAt } = await issueTrustedDevice(challenge.sub, {
+        userAgent: req.headers?.["user-agent"],
+        ipAddress: getIpFromRequest(req),
+      });
+      setDeviceCookie(res, token, expiresAt);
+    }
+    await establishAuthSession(res, result.user, { trusted: remember });
+    res.json({ user: result.user, trustedDevice: remember });
   } catch (err) {
     sendErrorResponse(res, err, { fallback: "Failed to verify code", status: 400, event: "auth.mfa_verify_failed" });
   }
@@ -205,6 +235,33 @@ export async function logout(req, res) {
   } finally {
     clearAuthCookies(res);
     res.json({ status: "ok" });
+  }
+}
+
+export async function getTrustedDevices(req, res) {
+  try {
+    res.json({ devices: await listTrustedDevices(req.user?._id) });
+  } catch (err) {
+    sendErrorResponse(res, err, { fallback: "Failed to list devices", status: 400, event: "auth.devices_list_failed" });
+  }
+}
+
+export async function deleteTrustedDevice(req, res) {
+  try {
+    await revokeTrustedDevice(req.user?._id, req.params.deviceId);
+    res.json({ devices: await listTrustedDevices(req.user?._id) });
+  } catch (err) {
+    sendErrorResponse(res, err, { fallback: "Failed to remove device", status: 400, event: "auth.device_revoke_failed" });
+  }
+}
+
+export async function deleteAllTrustedDevices(req, res) {
+  try {
+    const revoked = await revokeAllTrustedDevices(req.user?._id);
+    clearDeviceCookie(res);
+    res.json({ revoked, devices: [] });
+  } catch (err) {
+    sendErrorResponse(res, err, { fallback: "Failed to remove devices", status: 400, event: "auth.devices_revoke_failed" });
   }
 }
 

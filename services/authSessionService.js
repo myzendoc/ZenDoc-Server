@@ -5,12 +5,31 @@ import { signToken, verifyToken } from "../utils/jwt.js";
 import { appendSetCookie, parseCookies, serializeCookie } from "../utils/cookies.js";
 
 export const ACCESS_TOKEN_TTL_SECONDS = 10 * 60;
-export const SESSION_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
-export const SESSION_ABSOLUTE_TIMEOUT_MS = 12 * 60 * 60 * 1000;
+
+function minutesEnv(name, fallback) {
+  const value = Number(process.env[name]);
+  return (Number.isFinite(value) && value > 0 ? value : fallback) * 60 * 1000;
+}
+
+function hoursEnv(name, fallback) {
+  const value = Number(process.env[name]);
+  return (Number.isFinite(value) && value > 0 ? value : fallback) * 60 * 60 * 1000;
+}
+
+// Idle timeout is the automatic-logoff control; absolute caps a stolen cookie.
+export function getIdleTimeoutMs() {
+  return minutesEnv("SESSION_IDLE_TIMEOUT_MINUTES", 30);
+}
+
+export function getAbsoluteTimeoutMs(trusted = false) {
+  if (trusted) return hoursEnv("SESSION_TRUSTED_TIMEOUT_HOURS", 30 * 24);
+  return hoursEnv("SESSION_ABSOLUTE_TIMEOUT_HOURS", 24);
+}
 
 const ACCESS_COOKIE = "cb_access";
 const REFRESH_COOKIE = "cb_refresh";
 const MFA_COOKIE = "cb_mfa";
+const DEVICE_COOKIE = "cb_device";
 const ACTIVITY_WRITE_INTERVAL_MS = 60 * 1000;
 export const MFA_CHALLENGE_TTL_SECONDS = 5 * 60;
 
@@ -37,7 +56,7 @@ function newRefreshToken() {
   return crypto.randomBytes(32).toString("base64url");
 }
 
-function appendAuthCookies(res, accessToken, sessionId, refreshToken) {
+function appendAuthCookies(res, accessToken, sessionId, refreshToken, maxAge = getAbsoluteTimeoutMs()) {
   appendSetCookie(
     res,
     serializeCookie(ACCESS_COOKIE, accessToken, cookieOptions("/", ACCESS_TOKEN_TTL_SECONDS * 1000))
@@ -47,7 +66,7 @@ function appendAuthCookies(res, accessToken, sessionId, refreshToken) {
     serializeCookie(
       REFRESH_COOKIE,
       `${sessionId}.${refreshToken}`,
-      cookieOptions("/api/auth", SESSION_ABSOLUTE_TIMEOUT_MS)
+      cookieOptions("/api/auth", maxAge)
     )
   );
 }
@@ -75,20 +94,22 @@ export function renewAccessCookie(res, session) {
   );
 }
 
-export async function establishAuthSession(res, user) {
+export async function establishAuthSession(res, user, { trusted = false } = {}) {
   const subject = getSubject(user);
   if (!subject) throw new Error("Cannot create session without subject");
   const now = new Date();
   const refreshToken = newRefreshToken();
+  const lifetime = getAbsoluteTimeoutMs(trusted);
   const session = await AuthSession.create({
     subject,
     userId: mongoose.Types.ObjectId.isValid(subject) ? subject : undefined,
     role: user.role === "admin" ? "admin" : "provider",
     refreshTokenHash: hashToken(refreshToken),
+    trusted: Boolean(trusted),
     lastActivityAt: now,
-    absoluteExpiresAt: new Date(now.getTime() + SESSION_ABSOLUTE_TIMEOUT_MS),
+    absoluteExpiresAt: new Date(now.getTime() + lifetime),
   });
-  appendAuthCookies(res, issueAccessToken(session), String(session._id), refreshToken);
+  appendAuthCookies(res, issueAccessToken(session), String(session._id), refreshToken, lifetime);
   return session;
 }
 
@@ -106,7 +127,7 @@ function readRefreshCookie(cookieHeader) {
 function sessionIsActive(session, now = Date.now()) {
   if (!session || session.revokedAt) return false;
   if (new Date(session.absoluteExpiresAt).getTime() <= now) return false;
-  return new Date(session.lastActivityAt).getTime() + SESSION_IDLE_TIMEOUT_MS > now;
+  return new Date(session.lastActivityAt).getTime() + getIdleTimeoutMs() > now;
 }
 
 async function touchSession(session) {
@@ -165,7 +186,13 @@ export async function refreshAuthSession(cookieHeader, res) {
   session.refreshTokenHash = hashToken(nextRefreshToken);
   session.lastActivityAt = new Date();
   await session.save();
-  appendAuthCookies(res, issueAccessToken(session), String(session._id), nextRefreshToken);
+  appendAuthCookies(
+    res,
+    issueAccessToken(session),
+    String(session._id),
+    nextRefreshToken,
+    getAbsoluteTimeoutMs(session.trusted)
+  );
   return session;
 }
 
@@ -195,11 +222,11 @@ export function clearAuthCookies(res) {
 
 
 // A half-authenticated login holds only this token.
-export function issueMfaChallenge(res, user) {
+export function issueMfaChallenge(res, user, { remember = false } = {}) {
   const subject = getSubject(user);
   if (!subject) throw new Error("Cannot start MFA challenge without subject");
   const token = signToken(
-    { sub: subject, typ: "mfa" },
+    { sub: subject, typ: "mfa", remember: Boolean(remember) },
     process.env.JWT_SECRET,
     MFA_CHALLENGE_TTL_SECONDS
   );
@@ -215,6 +242,19 @@ export function readMfaChallenge(cookieHeader) {
   const payload = verifyToken(token, process.env.JWT_SECRET);
   if (!payload?.sub || payload.typ !== "mfa") return null;
   return payload;
+}
+
+export function readDeviceCookie(cookieHeader) {
+  return parseCookies(cookieHeader)[DEVICE_COOKIE] || "";
+}
+
+export function setDeviceCookie(res, token, expiresAt) {
+  const maxAge = Math.max(0, new Date(expiresAt).getTime() - Date.now());
+  appendSetCookie(res, serializeCookie(DEVICE_COOKIE, token, cookieOptions("/api/auth", maxAge)));
+}
+
+export function clearDeviceCookie(res) {
+  appendSetCookie(res, serializeCookie(DEVICE_COOKIE, "", cookieOptions("/api/auth", 0)));
 }
 
 export function clearMfaChallengeCookie(res) {
