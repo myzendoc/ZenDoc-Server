@@ -6,6 +6,7 @@ import { getGroup, postInvite, lookupInvite, postAcceptInvite, deleteMember, del
 import {
   createDashboardMeeting,
   createPrivateMeetingNote,
+  updatePrivateMeetingNote,
   deleteNotesMeeting,
   getDashboardMeeting,
   getMeetingNotes,
@@ -129,6 +130,7 @@ router.get("/dashboard/meetings/:id/notes", requireAuth, getMeetingNotes);
 router.patch("/dashboard/meetings/:id/notes/:noteId", requireAuth, updateMeetingNote);
 router.post("/dashboard/meetings/:id/private-notes", requireAuth, createPrivateMeetingNote);
 router.get("/dashboard/meetings/:id/private-notes", requireAuth, getPrivateMeetingNotes);
+router.patch("/dashboard/meetings/:id/private-notes/:noteId", requireAuth, updatePrivateMeetingNote);
 router.get("/notes/meetings", requireAuth, listNotesMeetings);
 router.get("/notes/meetings/:id", requireAuth, getNotesMeeting);
 router.patch("/notes/meetings/:id", requireAuth, renameNotesMeeting);

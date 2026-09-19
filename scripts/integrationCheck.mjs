@@ -42,7 +42,7 @@ async function call(cookieJar, method, path, body) {
   return { status: res.status, data };
 }
 
-await mongoose.connect("mongodb://127.0.0.1:27778/cb_reg");
+await mongoose.connect("mongodb://127.0.0.1:27778/cb_rev4");
 const db = mongoose.connection.db;
 const { generateTotpCode } = await import("../utils/totp.js");
 

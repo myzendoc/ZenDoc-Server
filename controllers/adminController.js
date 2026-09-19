@@ -39,6 +39,7 @@ function toDashboardUser(user) {
     avgSessionTime: toHourString(avgSeconds),
     avgSessionSeconds: avgSeconds,
     lastActiveAt: user.lastMeetingAt || null,
+    country: user.country || "",
     role: user.role,
     status: user.status || "active",
     isActive: user.isActive !== false,
@@ -62,12 +63,23 @@ export async function listUsers(req, res) {
   }
 }
 
+function summarize(users) {
+  const countries = new Set(users.map((u) => String(u.country || "").trim()).filter(Boolean));
+  return {
+    totalUsers: users.length,
+    totalSessions: users.reduce((sum, u) => sum + (u.meetingCount || 0), 0),
+    countryCount: countries.size,
+    countries: [...countries].sort(),
+  };
+}
+
 export async function getAdminDashboard(req, res) {
   try {
     const users = await listUsersWithMeetingCounts();
+    const stats = summarize(users);
     res.json({
       users: users.map(toDashboardUser),
-      totalUsers: users.length,
+      ...stats,
       total: users.length,
     });
   } catch (err) {

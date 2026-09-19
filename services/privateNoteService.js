@@ -22,6 +22,17 @@ export async function createPrivateNote(payload) {
   return decryptNote(note.toObject());
 }
 
+export async function updatePrivateNote(noteId, userId, content) {
+  const text = String(content || "").trim();
+  if (!noteId || !text) return null;
+  const note = await PrivateNote.findOneAndUpdate(
+    { _id: noteId, createdBy: userId },
+    { $set: { content: encryptField(text, PRIVATE_NOTE_CONTEXT) } },
+    { new: true }
+  ).lean();
+  return note ? decryptNote(note) : null;
+}
+
 export async function getPrivateNotesByMeeting(meetingId, options = {}) {
   if (!meetingId) return [];
   const query = { meetingId };

@@ -12,7 +12,7 @@ import {
   renameMeetingSession,
 } from "../services/meetingSessionService.js";
 import { createSoapNote, getSoapNote, getSoapNotesByMeeting, getSoapNotesBySession, updateSoapNoteSection } from "../services/soapNoteService.js";
-import { createPrivateNote, getPrivateNotesByMeeting, getPrivateNotesBySession } from "../services/privateNoteService.js";
+import { createPrivateNote, getPrivateNotesByMeeting, getPrivateNotesBySession, updatePrivateNote } from "../services/privateNoteService.js";
 import { getTranscriptsByRoom } from "../services/transcriptService.js";
 import { FREE_SOAP_TRANSCRIPT_LIMIT, getUserEntitlements, isFreeSessionLimitExceeded } from "../services/entitlementService.js";
 import { isUserIdActive } from "../services/userService.js";
@@ -36,14 +36,24 @@ function buildClientBase(req) {
   return `${req.protocol}://${req.get("host")}`;
 }
 
-function normalizeSessionTitle(sessionTitle, meetingTitle) {
-  const legacySessionPattern = /^session\s+\d+$/i;
-  const safeSessionTitle = typeof sessionTitle === "string" ? sessionTitle.trim() : "";
-  const safeMeetingTitle = typeof meetingTitle === "string" ? meetingTitle.trim() : "";
+// Auto-generated titles become "Visit N" by session index; a title the provider
+// actually typed is left alone.
+const AUTO_TITLE_PATTERN = /^(session|visit|meeting)\s*\d*$/i;
 
-  if (safeSessionTitle && !legacySessionPattern.test(safeSessionTitle)) return safeSessionTitle;
-  if (safeMeetingTitle && safeMeetingTitle.toLowerCase() !== "untitled meeting") return safeMeetingTitle;
-  return "Meeting";
+function normalizeSessionTitle(record, meeting) {
+  const sessionTitle = typeof record?.title === "string" ? record.title.trim() : "";
+  const meetingTitle = typeof meeting?.title === "string" ? meeting.title.trim() : "";
+  const index = Number(record?.sessionIndex);
+  // A scheduled meeting with no visits yet keeps the title the provider gave it.
+  if (!Number.isFinite(index) || index <= 0) return sessionTitle || meetingTitle || "Meeting";
+  const fallback = `Visit ${index}`;
+
+  if (!sessionTitle) return fallback;
+  if (AUTO_TITLE_PATTERN.test(sessionTitle)) return fallback;
+  if (sessionTitle.toLowerCase() === "untitled meeting") return fallback;
+  // Older sessions copied the meeting title verbatim; treat that as auto too.
+  if (meetingTitle && sessionTitle === meetingTitle) return fallback;
+  return sessionTitle;
 }
 
 function serializeSessionRecord(record, req) {
@@ -56,7 +66,7 @@ function serializeSessionRecord(record, req) {
 
   return {
     ...meeting,
-    title: normalizeSessionTitle(record.title, meeting.title),
+    title: normalizeSessionTitle(record, meeting),
     _id: record._id || meeting._id,
     meetingId: meeting._id,
     creatorPeerId: record.creatorPeerId || meeting.creatorPeerId,
@@ -261,6 +271,25 @@ export async function getNotesMeeting(req, res) {
     });
   } catch {
     res.status(500).json({ error: "Failed to fetch meeting data" });
+  }
+}
+
+export async function updatePrivateMeetingNote(req, res) {
+  try {
+    const content = String(req.body?.content || "").trim();
+    if (!content) {
+      res.status(400).json({ error: "Private note content is required" });
+      return;
+    }
+    // Scoped to the author, so one provider cannot edit another's private note.
+    const note = await updatePrivateNote(req.params.noteId, req.user?._id, content);
+    if (!note) {
+      res.status(404).json({ error: "Private note not found" });
+      return;
+    }
+    res.json({ note });
+  } catch (err) {
+    sendErrorResponse(res, err, { fallback: "Failed to update private note", status: 400, event: "meeting.private_note_update_failed" });
   }
 }
 

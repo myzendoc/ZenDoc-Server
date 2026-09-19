@@ -1,4 +1,4 @@
-import { getUserById } from "../services/userService.js";
+import { getBaaForDocument, getUserById } from "../services/userService.js";
 import { generateBaaPdf } from "../utils/baaPdf.js";
 import { sendErrorResponse } from "../utils/errors.js";
 
@@ -13,13 +13,15 @@ export async function downloadBaaDocument(req, res) {
       res.status(404).json({ error: "No signed BAA on file" });
       return;
     }
+    // sanitizeUser strips the signature, so read it straight from the document.
+    const baa = await getBaaForDocument(req.user?._id);
     const pdfBuffer = await generateBaaPdf({
-      organization: user.baa.organization,
-      signatoryName: user.baa.signatoryName,
-      signatoryTitle: user.baa.signatoryTitle,
-      signature: user.baa.signature,
-      signedAt: user.baa.signedAt,
-      effectiveDate: user.baa.effectiveDate,
+      organization: baa?.organization,
+      signatoryName: baa?.signatoryName,
+      signatoryTitle: baa?.signatoryTitle,
+      signature: baa?.signature,
+      signedAt: baa?.signedAt,
+      effectiveDate: baa?.effectiveDate,
     });
     const disposition = String(req.query?.download || "") === "1" ? "attachment" : "inline";
     res.setHeader("Content-Type", "application/pdf");

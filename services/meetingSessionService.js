@@ -4,7 +4,7 @@ import { User } from "../models/user.js";
 import { Transcript } from "../models/transcript.js";
 import { SoapNote } from "../models/soapNote.js";
 import { PrivateNote } from "../models/privateNote.js";
-import { decryptMeeting, MEETING_TITLE_CONTEXT } from "./meetingService.js";
+import { decryptMeeting } from "./meetingService.js";
 import { decryptFieldOrNull, encryptField } from "../utils/fieldCipher.js";
 
 const SAFE_CREATOR_FIELDS = "_id firstName lastName displayName email";
@@ -40,13 +40,10 @@ export async function startMeetingSession({ roomId, creatorPeerId, creatorSocket
   if (creatorSocketId !== undefined) meeting.creatorSocketId = creatorSocketId;
   await meeting.save();
 
-  // Re-encrypt under the session's own field context, not copied as ciphertext.
   const session = await MeetingSession.create({
     meetingId: meeting._id,
     roomId,
-    title: encryptSessionTitle(
-      (meeting.title && decryptFieldOrNull(meeting.title, MEETING_TITLE_CONTEXT)) || "Meeting"
-    ),
+    title: encryptSessionTitle(`Visit ${nextIndex}`),
     sessionIndex: nextIndex,
     startedAt: now,
     creatorPeerId: creatorPeerId || meeting.creatorPeerId,

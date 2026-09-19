@@ -4,6 +4,7 @@ import QRCode from "qrcode";
 import { User } from "../models/user.js";
 import { Meeting } from "../models/meeting.js";
 import { MeetingSession } from "../models/meetingSession.js";
+import { AuditLog } from "../models/auditLog.js";
 import { publicError } from "../utils/errors.js";
 import { revokeAllSessionsForSubject } from "./authSessionService.js";
 import { disconnectUserSockets } from "./sessionRevocation.js";
@@ -251,6 +252,13 @@ export async function findUserByEmail(email) {
   return user;
 }
 
+// Raw BAA including the signature, for server-side PDF rendering only.
+export async function getBaaForDocument(userId) {
+  if (!userId) return null;
+  const user = await User.findById(userId).select("baa").lean();
+  return user?.baa || null;
+}
+
 export async function getUserById(id) {
   if (!id) return null;
   const user = await User.findById(id);
@@ -289,6 +297,13 @@ export async function updateUserProfile(userId, payload = {}) {
 
 export async function listUsersWithMeetingCounts() {
   const users = await User.find({}).sort({ createdAt: -1 }).lean();
+  // Last known country per user, taken from their most recent audit entry.
+  const countries = await AuditLog.aggregate([
+    { $match: { actorUserId: { $ne: null }, country: { $nin: [null, ""] } } },
+    { $sort: { createdAt: -1 } },
+    { $group: { _id: "$actorUserId", country: { $first: "$country" } } },
+  ]);
+  const countryMap = new Map(countries.map((item) => [String(item._id), item.country]));
   const meetingCounts = await MeetingSession.aggregate([
     { $match: { createdBy: { $exists: true, $ne: null } } },
     {
@@ -325,6 +340,7 @@ export async function listUsersWithMeetingCounts() {
       meetingCount: stats.count || 0,
       lastMeetingAt: stats.lastMeetingAt || null,
       totalMeetingSeconds: Math.max(0, Math.floor((stats.totalDurationMs || 0) / 1000)),
+      country: countryMap.get(String(user._id)) || "",
     };
   });
 }
