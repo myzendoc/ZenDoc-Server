@@ -46,6 +46,8 @@ const userSchema = new mongoose.Schema(
     pendingEmail: { type: String },
     emailChangeOtp: { type: String },
     emailChangeOtpExpires: { type: Date },
+    termsAcceptedAt: { type: Date },
+    termsVersion: { type: String },
     npiNumber: { type: String },
     primarySpecialty: { type: String },
     statesLicensed: { type: [String], default: [] },

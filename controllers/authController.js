@@ -64,9 +64,9 @@ function getAuditContext(req) {
 
 export async function signup(req, res) {
   try {
-    const { firstName, lastName, email, password, baaOrganization, baaSignatoryName, baaSignatoryTitle, baaSignature } = req.body || {};
+    const { firstName, lastName, email, password, acceptedTerms, baaOrganization, baaSignatoryName, baaSignatoryTitle, baaSignature } = req.body || {};
     // Self-signup always produces a provider.
-    const result = await createUser({ firstName, lastName, email, password });
+    const result = await createUser({ firstName, lastName, email, password, acceptedTerms: Boolean(acceptedTerms) });
     if (baaSignature || baaSignatoryName) {
       // Capture the signed BAA now; it is emailed once the account is verified.
       await recordBaaSignature(

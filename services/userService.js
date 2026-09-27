@@ -134,7 +134,9 @@ export async function isUserIdDeactivated(userId) {
   return Boolean(user) && user.status === "deactivated";
 }
 
-export async function createUser({ firstName, lastName, email, password }) {
+export const TERMS_VERSION = "2026-09-20";
+
+export async function createUser({ firstName, lastName, email, password, acceptedTerms = false }) {
   if (!firstName || !email || !password) throw publicError("Missing required fields");
   const existing = await User.findOne({ email: email.toLowerCase() });
   if (existing) throw new Error("User already exists");
@@ -149,6 +151,8 @@ export async function createUser({ firstName, lastName, email, password }) {
     status: "active",
     onboardingComplete: false,
     verified: false,
+    termsAcceptedAt: acceptedTerms ? new Date() : undefined,
+    termsVersion: acceptedTerms ? TERMS_VERSION : undefined,
   });
   return { user: sanitizeUser(user) };
 }
