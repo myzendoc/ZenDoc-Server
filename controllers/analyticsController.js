@@ -1,5 +1,5 @@
 import { listMeetingSessionsWithContext } from "../services/meetingSessionService.js";
-import { getParticipantCountsByRoomSession } from "../services/transcriptService.js";
+import { getPatientCountsBySession } from "../services/participantService.js";
 
 function monthKey(date) {
   const d = new Date(date);
@@ -28,8 +28,10 @@ export async function getAnalyticsSummary(req, res) {
     const monthMinutes = new Map();
     const monthParticipants = new Map();
 
-    const roomIds = [...new Set(sessions.map((m) => m.roomId).filter(Boolean))];
-    const participantCountsBySession = await getParticipantCountsByRoomSession(roomIds);
+    // Counted from join records, not transcripts: a patient who never spoke
+    // still attended, and the provider is not a patient.
+    const sessionIds = sessions.map((m) => m._id).filter(Boolean);
+    const participantCountsBySession = await getPatientCountsBySession(sessionIds);
 
     sessions.forEach((m) => {
       totalSessions += 1;
@@ -37,7 +39,7 @@ export async function getAnalyticsSummary(req, res) {
       const end = m.endedAt || m.startedAt || m.createdAt;
       const durationMs = start && end ? Math.max(new Date(end) - new Date(start), 0) : 0;
       const durationMin = durationMs / 60000;
-      const sessionParticipants = participantCountsBySession[`${m.roomId}:${m.sessionIndex ?? 0}`] || 0;
+      const sessionParticipants = participantCountsBySession[String(m._id)] || 0;
       totalMinutes += durationMin;
       const key = monthKey(start || end);
       if (key) {

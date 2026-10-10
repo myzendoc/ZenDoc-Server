@@ -41,6 +41,7 @@ import { getTranscriptionProcessEnv } from "./utils/transcriptionProcess.js";
 import { applyCors, isAllowedOrigin } from "./utils/origins.js";
 import { authenticateSocketSession, revalidateSocketSession } from "./middleware/socketSession.js";
 import { registerSocketDisconnector } from "./services/sessionRevocation.js";
+import { recordParticipantJoin, recordParticipantLeave } from "./services/participantService.js";
 import { startScheduledJobs, stopScheduledJobs } from "./services/scheduler.js";
 import { consumeWaitingRoomEmailLimit } from "./middleware/rateLimit.js";
 
@@ -773,6 +774,23 @@ io.on("connection", (socket) => {
     socket.broadcast.to(roomId).emit("clearAnnotations");
   });
 
+  socket.on("meeting:end", (_payload, callback) => {
+    const membership = getSocketMeeting(socket);
+    const room = membership?.room;
+    if (!room || !["creator", "admin"].includes(membership?.role)) {
+      callback?.({ error: "Only the host can end this meeting" });
+      return;
+    }
+    logSocketAudit(socket, {
+      action: "meeting.end",
+      resourceId: room,
+      metadata: { peerId: membership.peerId, role: membership.role },
+    });
+    handleDisconnecting(socket);
+    endMeetingForRoom(room, "host_ended");
+    callback?.({ ended: true });
+  });
+
   socket.on("disconnecting", () => {
     const membership = getSocketMeeting(socket);
     if (membership?.room) {
@@ -782,9 +800,19 @@ io.on("connection", (socket) => {
         resourceId: membership.room,
         metadata: { peerId: membership.peerId, role: membership.role },
       });
+      if (membership.meetingSessionId && membership.peerId) {
+        recordParticipantLeave({
+          meetingSessionId: membership.meetingSessionId,
+          peerId: membership.peerId,
+        }).catch((err) => logError("meeting.participant_leave_failed", err));
+      }
     }
     removeWaitingSocket(socket.id);
     handleDisconnecting(socket);
+    // Covers the host simply closing the tab, not just pressing End.
+    if (membership?.room && ["creator", "admin"].includes(membership.role)) {
+      endMeetingForRoom(membership.room, "host_left");
+    }
   });
 });
 
@@ -906,8 +934,19 @@ async function addUserCall(user, socket) {
     username,
     role,
     userId: role === "guest" ? null : socket.data?.auth?.userId || null,
+    meetingSessionId: session?.sessionId || null,
+    sessionIndex: session?.sessionIndex ?? null,
+    meetingId: session?.meetingId || null,
   };
   Users.set(socket.id, { room, peerId, username, role });
+  recordParticipantJoin({
+    roomId: room,
+    meetingId: session?.meetingId,
+    meetingSessionId: session?.sessionId,
+    sessionIndex: session?.sessionIndex,
+    peerId,
+    role,
+  }).catch((err) => logError("meeting.participant_join_failed", err));
   socket.join(room);
   if (["creator", "admin"].includes(role)) {
     socket.join(`${room}-creator`);
@@ -1466,6 +1505,30 @@ function unpipeProducers(routerIdx, producerId, consumerId) {
         }
       }
     }
+  }
+}
+
+function endMeetingForRoom(room, reason = "host_ended") {
+  if (!room) return;
+  io.to(room).emit("meeting:ended", { room, reason });
+  rooms.delete(room);
+  waitingRooms.delete(room);
+  sessionManager.endSession(room).catch((err) => logError("session.finalize_failed", err));
+  // Clear membership so the next visit in this room starts from scratch.
+  for (const client of io.sockets.adapter.rooms.get(room) || []) {
+    const target = io.sockets.sockets.get(client);
+    if (!target) continue;
+    const membership = getSocketMeeting(target);
+    if (membership?.meetingSessionId && membership?.peerId) {
+      recordParticipantLeave({
+        meetingSessionId: membership.meetingSessionId,
+        peerId: membership.peerId,
+      }).catch((err) => logError("meeting.participant_leave_failed", err));
+    }
+    target.data.meeting = null;
+    Users.delete(target.id);
+    target.leave(room);
+    target.leave(`${room}-creator`);
   }
 }
 
