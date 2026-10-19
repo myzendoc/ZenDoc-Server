@@ -7,6 +7,7 @@ import {
 import { listAuditLogs } from "../services/auditLogService.js";
 import { getScheduledJobStatus } from "../services/scheduler.js";
 import { getRetentionSummary } from "../services/retentionService.js";
+import { getAdminAnalytics } from "../services/adminAnalyticsService.js";
 import { sendErrorResponse } from "../utils/errors.js";
 
 function toHourString(totalSeconds = 0) {
@@ -103,6 +104,14 @@ export async function getComplianceStatus(req, res) {
     res.json({ jobs, retention });
   } catch (err) {
     sendErrorResponse(res, err, { fallback: "Failed to load compliance status", status: 500, event: "admin.compliance_status_failed" });
+  }
+}
+
+export async function getAdminAnalyticsSummary(req, res) {
+  try {
+    res.json(await getAdminAnalytics());
+  } catch (err) {
+    sendErrorResponse(res, err, { fallback: "Failed to load analytics", status: 500, event: "admin.analytics_failed" });
   }
 }
 

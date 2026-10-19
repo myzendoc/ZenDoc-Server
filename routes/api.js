@@ -1,7 +1,7 @@
 import express from "express";
 import passport, { isGoogleAuthEnabled } from "../config/passport.js";
 import { signup, login, logout, me, refreshSession, touchSession, updateProfile, sendOtp, verifyOtp, forgotPassword, resetPassword, googleCallback, googleFailure, changePassword, changeEmail, verifyEmailChange, disconnectGoogle, verifyMfa, getMfa, startMfaEnrollment, confirmMfa, turnOffMfa, refreshRecoveryCodes, getTrustedDevices, deleteTrustedDevice, deleteAllTrustedDevices } from "../controllers/authController.js";
-import { downloadBaaDocument } from "../controllers/baaController.js";
+import { downloadBaaDocument, getBaaText } from "../controllers/baaController.js";
 import { getGroup, postInvite, lookupInvite, postAcceptInvite, deleteMember, deleteInvite, postLeave, postDeactivateMember, postReactivateMember } from "../controllers/groupController.js";
 import {
   createDashboardMeeting,
@@ -25,6 +25,7 @@ import {
   getAdminAuditLogs,
   getAdminDashboard,
   getComplianceStatus,
+  getAdminAnalyticsSummary,
   listUsers,
   reactivateUserAccount,
   updateUserRole,
@@ -106,6 +107,7 @@ router.post("/auth/mfa/recovery-codes", requireAuth, mfaVerifyRateLimit, refresh
 router.get("/auth/devices", requireAuth, getTrustedDevices);
 router.delete("/auth/devices/:deviceId", requireAuth, deleteTrustedDevice);
 router.delete("/auth/devices", requireAuth, deleteAllTrustedDevices);
+router.get("/baa/text", getBaaText);
 router.get("/baa/document", requireAuth, downloadBaaDocument);
 router.get("/group", requireAuth, getGroup);
 router.post("/group/invites", requireAuth, invitationRateLimit, postInvite);
@@ -145,6 +147,7 @@ router.post("/admin/users/:userId/role", requireAuth, requireAdmin, updateUserRo
 router.get("/admin/dashboard", requireAuth, requireAdmin, getAdminDashboard);
 router.get("/admin/audit-logs", requireAuth, requireAdmin, getAdminAuditLogs);
 router.get("/admin/compliance", requireAuth, requireAdmin, getComplianceStatus);
+router.get("/admin/analytics", requireAuth, requireAdmin, getAdminAnalyticsSummary);
 // Emergency access (§164.312(a)(2)(ii)) — every route here is audited by default.
 router.post("/admin/break-glass", requireAuth, requireAdmin, mfaVerifyRateLimit, openBreakGlass);
 router.get("/admin/break-glass", requireAuth, requireAdmin, listBreakGlass);

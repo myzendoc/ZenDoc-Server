@@ -1,5 +1,6 @@
 import { getBaaForDocument, getUserById } from "../services/userService.js";
 import { generateBaaPdf } from "../utils/baaPdf.js";
+import { BAA_DOCUMENT_VERSION, BUSINESS_ASSOCIATE, RECITALS, BODY } from "../utils/baaDocument.js";
 import { sendErrorResponse } from "../utils/errors.js";
 
 export async function downloadBaaDocument(req, res) {
@@ -31,4 +32,15 @@ export async function downloadBaaDocument(req, res) {
   } catch (err) {
     sendErrorResponse(res, err, { fallback: "Failed to generate BAA document", event: "baa.document_failed" });
   }
+}
+
+// Public: the consent screen renders this before signup, so it cannot require auth.
+export function getBaaText(_req, res) {
+  res.setHeader("Cache-Control", "public, max-age=3600");
+  res.json({
+    version: BAA_DOCUMENT_VERSION,
+    businessAssociate: BUSINESS_ASSOCIATE,
+    recitals: RECITALS,
+    body: BODY,
+  });
 }
