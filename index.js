@@ -16,12 +16,24 @@ import { spawn } from "child_process";
 import { connectDatabase } from "./db.js";
 import { saveFinalTranscript } from "./services/transcriptService.js";
 import { sessionManager } from "./services/sessionManager.js";
-import { getMeeting } from "./services/meetingService.js";
+import { getMeeting, setMeetingTranscriptLanguage } from "./services/meetingService.js";
 import apiRouter from "./routes/api.js";
 import passport, { configurePassport } from "./config/passport.js";
 import { auditHttpActivity } from "./middleware/audit.js";
 import { createAuditLog } from "./services/auditLogService.js";
 import { getIpFromSocket, getSocketAuditActor } from "./utils/audit.js";
+import { listSupportedLanguages, resolveDeepgramOptions, resolveLanguage } from "./utils/languages.js";
+import { clearAssistant, getAssistantState, maybeAssist, recordAssistantLine } from "./services/assistantRunner.js";
+import { ASSISTANT_DISCLAIMER, isAssistantConfigured } from "./services/medicalAssistantService.js";
+import {
+  captionChannel,
+  clearRoomTranslation,
+  getListenerLanguage,
+  fanoutUtterance,
+  removeListener,
+  setListenerLanguage,
+} from "./services/translationRouter.js";
+import { isSpeechConfigured, isTranslationConfigured, listSpeakableLanguages } from "./services/translationService.js";
 import { getUserById, isUserIdActive } from "./services/userService.js";
 import { sendWaitingRoomAlertEmail } from "./utils/mailer.js";
 import { stripeWebhook } from "./controllers/billingController.js";
@@ -108,8 +120,11 @@ app.use((_req, res, next) => {
 
 app.use(applyCors);
 
+const RAW_BODY_ROUTES = ["/api/billing/webhook", "/api/recordings"];
+
 app.use((req, res, next) => {
-  if (String(req.originalUrl || "").startsWith("/api/billing/webhook")) {
+  // Recordings and the Stripe webhook arrive as raw bytes, not JSON.
+  if (RAW_BODY_ROUTES.some((route) => String(req.originalUrl || "").startsWith(route))) {
     next();
     return;
   }
@@ -646,6 +661,117 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("setTranscriptLanguage", async ({ room, language } = {}, callback) => {
+    const membership = getSocketMeeting(socket);
+    if (membership?.room !== room || !rooms.get(room)) {
+      callback?.({ error: "Room not found" });
+      return;
+    }
+    if (!isSocketRoomManager(socket, room)) {
+      logSocketAudit(socket, {
+        action: "setTranscriptLanguage",
+        status: "failure",
+        payload: {},
+        resourceId: room,
+        metadata: { reason: "not_creator" },
+      });
+      callback?.({ error: "Only the host can change the transcription language" });
+      return;
+    }
+    const resolved = resolveLanguage(language);
+    sessionManager.setTranscriptLanguage(room, resolved);
+    rooms.set(room, { ...rooms.get(room), transcriptLanguage: resolved });
+    await setMeetingTranscriptLanguage(room, resolved).catch((err) =>
+      logError("transcription.language_persist_failed", err)
+    );
+
+    // Running recognisers reconnect to Deepgram on the new language.
+    const deepgram = resolveDeepgramOptions(resolved);
+    const command = `${JSON.stringify({ type: "CHANGE_LANG", language: deepgram.language, model: deepgram.model })}\n`;
+    for (const child of sessionManager.listProcesses(room)) {
+      try {
+        child?.stdin?.write(command);
+      } catch (err) {
+        logError("transcription.language_switch_failed", err);
+      }
+    }
+
+    io.to(room).emit("transcriptLanguage", { language: resolved });
+    logSocketAudit(socket, {
+      action: "setTranscriptLanguage",
+      payload: {},
+      resourceId: room,
+      metadata: { language: resolved },
+    });
+    callback?.({ status: "ok", language: resolved });
+  });
+
+  socket.on("getTranscriptLanguages", (callback) => {
+    callback?.({ languages: listSupportedLanguages() });
+  });
+
+  socket.on("assist:state", (_payload, callback) => {
+    const membership = getSocketMeeting(socket);
+    if (!membership?.room || !isSocketRoomManager(socket, membership.room)) {
+      callback?.({ error: "Not allowed" });
+      return;
+    }
+    const state = getAssistantState(membership.room);
+    callback?.({
+      configured: isAssistantConfigured(),
+      disclaimer: ASSISTANT_DISCLAIMER,
+      latest: state.latest,
+      assistsUsed: state.assistsUsed,
+      limit: Number.isFinite(state.limit) ? state.limit : null,
+      remaining: Number.isFinite(state.limit) ? Math.max(0, state.limit - state.assistsUsed) : null,
+    });
+  });
+
+  socket.on("assist:refresh", async (_payload, callback) => {
+    const membership = getSocketMeeting(socket);
+    if (!membership?.room || !isSocketRoomManager(socket, membership.room)) {
+      callback?.({ error: "Not allowed" });
+      return;
+    }
+    try {
+      const assist = await maybeAssist(membership.room, {
+        language: sessionManager.getTranscriptLanguage(membership.room),
+        force: true,
+      });
+      if (assist) io.to(`${membership.room}-creator`).emit("assist:update", assist);
+      callback?.({ status: "ok", generated: Boolean(assist) });
+    } catch (err) {
+      logError("assistant.refresh_failed", err);
+      callback?.({ error: "Could not refresh suggestions" });
+    }
+  });
+
+  socket.on("translation:subscribe", ({ language, speak } = {}, callback) => {
+    const membership = getSocketMeeting(socket);
+    const room = membership?.room;
+    if (!room || !rooms.get(room)) {
+      callback?.({ error: "Room not found" });
+      return;
+    }
+    // Leave the previous channel before joining the new one, so a listener
+    // never receives two languages at once.
+    const previous = getListenerLanguage(room, socket.id);
+    if (previous?.language) socket.leave(captionChannel(room, previous.language));
+
+    const next = setListenerLanguage(room, socket.id, { language, speak });
+    if (next?.language) socket.join(captionChannel(room, next.language));
+    callback?.({ status: "ok", ...next });
+  });
+
+  socket.on("translation:options", (callback) => {
+    callback?.({
+      configured: isTranslationConfigured(),
+      speechConfigured: isSpeechConfigured(),
+      speakable: listSpeakableLanguages(),
+      languages: listSupportedLanguages().filter((item) => item.code !== "auto"),
+    });
+  });
+
   socket.on("connectTransport", ({ dtlsParameters, id }, callback) => {
     connectTransport(socket, dtlsParameters, id, callback);
   });
@@ -794,6 +920,7 @@ io.on("connection", (socket) => {
   socket.on("disconnecting", () => {
     const membership = getSocketMeeting(socket);
     if (membership?.room) {
+      removeListener(membership.room, socket.id);
       logSocketAudit(socket, {
         action: "meeting.leave",
         payload: { username: membership.username },
@@ -896,6 +1023,7 @@ async function addUserCall(user, socket) {
       creatorUserId: creatorJoin && meeting?.createdBy ? String(meeting.createdBy) : null,
       screenShareAllowed: entitlements.screenShareAllowed,
       transcriptRecordingEnabled: true,
+      transcriptLanguage: resolveLanguage(meeting?.transcriptLanguage),
     };
     rooms.set(room, roomObj);
     if (creatorJoin) {
@@ -958,6 +1086,8 @@ async function addUserCall(user, socket) {
     isCreator: ["creator", "admin"].includes(role),
     screenShareAllowed: roomObj?.screenShareAllowed !== false,
     transcriptRecordingEnabled: roomObj?.transcriptRecordingEnabled !== false,
+    transcriptLanguage: sessionManager.getTranscriptLanguage(room),
+    supportedLanguages: listSupportedLanguages(),
   };
 }
 
@@ -1136,6 +1266,7 @@ async function produce(data, socket, callback) {
       paused: true,
     });
 
+    const deepgram = resolveDeepgramOptions(sessionManager.getTranscriptLanguage(roomId));
     const pythonProcess = spawn(
       "python3",
       [
@@ -1144,7 +1275,9 @@ async function produce(data, socket, callback) {
         remoteRtcpPort,
         rtpTransport.rtcpTuple.localPort,
         rtpConsumer.rtpParameters.codecs[0].payloadType,
-        rtpConsumer.rtpParameters.encodings[0].ssrc
+        rtpConsumer.rtpParameters.encodings[0].ssrc,
+        deepgram.model,
+        deepgram.language
       ],
       {
         env: getTranscriptionProcessEnv(),
@@ -1182,9 +1315,25 @@ async function produce(data, socket, callback) {
                 text: msg?.text,
                 sessionIndex: session?.sessionIndex,
                 meetingSessionId: session?.sessionId,
+                language: msg?.language,
               }).catch((err) =>
                 logError("transcription.save_failed", err)
               );
+
+              fanoutUtterance({
+                roomId,
+                text: msg?.text,
+                sourceLanguage: msg?.language || sessionManager.getTranscriptLanguage(roomId),
+                speakerPeerId: peerId,
+                emit: (channel, event, payload) => io.to(channel).emit(event, payload),
+              }).catch((err) => logError("translation.emit_failed", err));
+
+              recordAssistantLine(roomId, msg?.text);
+              maybeAssist(roomId, { language: sessionManager.getTranscriptLanguage(roomId) })
+                .then((assist) => {
+                  if (assist) io.to(`${roomId}-creator`).emit("assist:update", assist);
+                })
+                .catch((err) => logError("assistant.emit_failed", err));
             }
           }
 
@@ -1513,6 +1662,8 @@ function endMeetingForRoom(room, reason = "host_ended") {
   io.to(room).emit("meeting:ended", { room, reason });
   rooms.delete(room);
   waitingRooms.delete(room);
+  clearAssistant(room);
+  clearRoomTranslation(room);
   sessionManager.endSession(room).catch((err) => logError("session.finalize_failed", err));
   // Clear membership so the next visit in this room starts from scratch.
   for (const client of io.sockets.adapter.rooms.get(room) || []) {
@@ -1566,6 +1717,8 @@ function handleDisconnecting(socket) {
       } else {
         rooms.delete(room);
         waitingRooms.delete(room);
+        clearAssistant(room);
+        clearRoomTranslation(room);
         sessionManager.endSession(room).catch((err) => logError("session.finalize_failed", err));
       }
 

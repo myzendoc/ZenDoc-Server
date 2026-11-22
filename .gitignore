@@ -10,3 +10,5 @@ dist
 .*
 !.env.example
 docs/
+
+__pycache__/

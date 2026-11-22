@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { Meeting } from "../models/meeting.js";
 import { User } from "../models/user.js";
 import { decryptFieldOrNull, encryptField } from "../utils/fieldCipher.js";
+import { resolveLanguage } from "../utils/languages.js";
 
 const SAFE_CREATOR_FIELDS = "_id firstName lastName displayName email";
 
@@ -43,6 +44,15 @@ export async function upsertMeeting({ roomId, creatorPeerId, creatorSocketId }) 
     await meeting.save();
   }
   return decryptMeeting(meeting);
+}
+
+export async function setMeetingTranscriptLanguage(roomId, language) {
+  if (!roomId) return null;
+  return Meeting.findOneAndUpdate(
+    { roomId },
+    { $set: { transcriptLanguage: resolveLanguage(language) } },
+    { new: true }
+  ).lean();
 }
 
 export async function endMeeting(roomId) {

@@ -1,148 +1,26 @@
 import { GoogleGenAI, Type } from "@google/genai";
+import { getLanguageName } from "../utils/languages.js";
+import { buildTemplateInstruction, getNoteTemplate, resolveTemplateId } from "../utils/noteTemplates.js";
 import { logError } from "../utils/logging.js";
 
 const MODEL = "gemini-2.5-flash";
-const SYSTEM_INSTRUCTION =
-`
-Create a comprehensive medical SOAP note based on the transcript.
-
-
-
-Follow these strict formatting rules:
-
-
-
-Use four main sections: Subjective, Objective, Assessment, and Plan.
-
-
-
-Under each section, every point must be on a new line.
-
-
-
-Do not combine unrelated ideas into a single bullet.
-
-
-
-Do not use paragraph blocks.
-
-
-
-Be detailed, clinically precise, and specific.
-
-
-
-Include all relevant details from the transcript, including medications, prior testing, family history, social factors, and pertinent negatives.
-
-
-
-Convert conversational statements into professional medical documentation.
-
-
-
-Do not add information that is not stated or clearly implied.
-
-
-
-For the Assessment section:
-
-
-
-Organize by numbered problems.
-
-
-
-Each problem must begin with a number and a clear diagnostic title.
-
-
-
-Under each problem, include:
-
-
-
-Clinical interpretation of findings
-
-
-
-Relevant differential considerations if appropriate
-
-
-
-Risk stratification if discussed
-
-
-
-Epidemiologic context if mentioned
-
-
-
-For the Plan section:
-
-
-
-Mirror the same numbered problems listed in the Assessment.
-
-
-
-Each problem number must match exactly.
-
-
-
-Under each problem, include if available, if not do not mention at all:
-
-
-
-Diagnostic plan
-
-
-
-Treatment plan
-
-
-
-Medication decisions
-
-
-
-Counseling provided
-
-
-
-Follow-up timeline
-
-
-
-Contingency plans based on possible results
-
-
-
-Each item must be on its own hyphenated line.
-
-
-
-Include shared decision-making documentation where applicable.
-
-The output format of each section should be in Structured/Formatted HTML instead of plain text, using appropriate tags for clarity and readability.
-`
-
-const soapSchema = {
-  description: "SOAP note structure",
-  type: Type.OBJECT,
-  properties: {
-    subjective: { type: Type.STRING, description: "Patient's subjective report" },
-    objective: { type: Type.STRING, description: "Physician's objective findings" },
-    assessment: { type: Type.STRING, description: "Diagnosis or analysis" },
-    plan: { type: Type.STRING, description: "Treatment plan" },
-  },
-  required: ["subjective", "objective", "assessment", "plan"],
-};
+function buildSchema(template) {
+  return {
+    description: `${template.label} structure`,
+    type: Type.OBJECT,
+    properties: Object.fromEntries(
+      template.sections.map((section) => [section.key, { type: Type.STRING, description: section.label }])
+    ),
+    required: template.sections.map((section) => section.key),
+  };
+}
 
 let client;
 
 // Both paths target aiplatform.googleapis.com (Agent Platform, formerly Vertex
 // AI), which is HIPAA-eligible under the Google Cloud BAA. There is no path to
 // the AI Studio endpoint, which is not covered.
-function getClient() {
+export function getAgentPlatformClient() {
   if (client) return client;
 
   const apiKey = String(process.env.GOOGLE_CLOUD_API_KEY || process.env.GOOGLE_API_KEY || "").trim();
@@ -171,24 +49,75 @@ export function isSoapGenerationConfigured() {
   return getSoapAuthMode() !== "unconfigured";
 }
 
-export async function generateSoaps(transcript) {
+// The note is written in the language of the consultation, with clinical
+// section names and codes left in their standard form.
+function languageInstruction(language) {
+  const name = getLanguageName(language);
+  if (!name || name === "English") return "";
+  return `\n\nWrite every section of the note in ${name}, the language of the consultation. Keep drug names, dosages, lab names and ICD/CPT codes in their internationally recognised form. Do not translate the transcript into English first.`;
+}
+
+export async function generateClinicalNote(transcript, { language, template } = {}) {
   if (!transcript) return null;
 
+  const templateId = resolveTemplateId(template);
+  const definition = getNoteTemplate(templateId);
+
   try {
-    const response = await getClient().models.generateContent({
+    const response = await getAgentPlatformClient().models.generateContent({
       model: MODEL,
       contents: [{ role: "user", parts: [{ text: transcript }] }],
       config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
+        systemInstruction: `${buildTemplateInstruction(templateId)}${languageInstruction(language)}`,
         responseMimeType: "application/json",
-        responseSchema: soapSchema,
+        responseSchema: buildSchema(definition),
       },
     });
     const raw = response?.text?.trim();
     if (!raw) return null;
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    // Keep only this template's sections so a stray key cannot reach storage.
+    return Object.fromEntries(
+      definition.sections
+        .map((section) => [section.key, parsed?.[section.key]])
+        .filter(([, value]) => typeof value === "string" && value.trim())
+    );
   } catch (err) {
     logError("soap.generation_failed", err);
     return null;
+  }
+}
+
+export function generateSoaps(transcript, options = {}) {
+  return generateClinicalNote(transcript, options);
+}
+
+const TITLE_INSTRUCTION = `Write a short title for this clinical visit, the way a chat app titles a conversation.
+
+Rules:
+- Three to six words. No trailing punctuation.
+- Name the main clinical issue, not the format. "Persistent migraine review", not "Patient visit note".
+- Use the patient's name only if the transcript states it, as a first name and possessive: "Chris's ankle sprain".
+- Plain clinical language the provider will recognise at a glance in a list.
+- If the transcript is too short or unclear to tell, answer exactly: Untitled visit
+- Reply with the title alone, nothing else.`;
+
+export async function generateVisitTitle(transcript, { language } = {}) {
+  if (!transcript) return "";
+  try {
+    const response = await getAgentPlatformClient().models.generateContent({
+      model: MODEL,
+      contents: [{ role: "user", parts: [{ text: transcript.slice(0, 12000) }] }],
+      config: {
+        systemInstruction: `${TITLE_INSTRUCTION}${languageInstruction(language)}`,
+        temperature: 0.2,
+        maxOutputTokens: 500,
+      },
+    });
+    const title = response?.text?.trim().replace(/^["'\s]+|["'\s.]+$/g, "").slice(0, 80);
+    return !title || title.toLowerCase() === "untitled visit" ? "" : title;
+  } catch (err) {
+    logError("soap.title_failed", err);
+    return "";
   }
 }

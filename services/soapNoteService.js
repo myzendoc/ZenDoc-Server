@@ -1,6 +1,7 @@
 import { SoapNote } from "../models/soapNote.js";
 import { sanitizeClinicalHtml, sanitizeSoapContent, sanitizeSoapNote } from "../utils/clinicalHtml.js";
 import { decryptFieldOrNull, decryptValues, encryptField, encryptValues } from "../utils/fieldCipher.js";
+import { getTemplateSectionKeys, resolveTemplateId } from "../utils/noteTemplates.js";
 import { logError } from "../utils/logging.js";
 
 // Sections encrypted individually so one can be updated alone.
@@ -20,7 +21,7 @@ function decryptNote(note) {
   return sanitizeSoapNote(plain);
 }
 
-export async function createSoapNote({ roomId, content, meetingId, meetingSessionId, sessionIndex, createdBy, summary }) {
+export async function createSoapNote({ roomId, content, meetingId, meetingSessionId, sessionIndex, createdBy, summary, language, template }) {
   if (!roomId && !meetingId && !meetingSessionId) return null;
   if (!content) return null;
   const normalizedContent = sanitizeSoapContent(content);
@@ -33,6 +34,8 @@ export async function createSoapNote({ roomId, content, meetingId, meetingSessio
     sessionIndex,
     createdBy,
     summary: summary ? encryptField(summary, SOAP_SUMMARY_CONTEXT) : summary,
+    language: language || undefined,
+    template: resolveTemplateId(template),
   });
   return decryptNote(note);
 }
@@ -69,6 +72,24 @@ export async function getSoapNotesBySession(meetingSessionId) {
   return notes.map(decryptNote);
 }
 
+export async function replaceSoapNoteForTemplate({ roomId, content, meetingId, meetingSessionId, sessionIndex, createdBy, language, template }) {
+  const templateId = resolveTemplateId(template);
+  const filter = meetingSessionId ? { meetingSessionId } : { meetingId };
+  if (filter.meetingSessionId || filter.meetingId) {
+    await SoapNote.softDelete({ ...filter, template: templateId }, { actorId: createdBy, reason: "regenerated" });
+  }
+  return createSoapNote({
+    roomId,
+    content,
+    meetingId,
+    meetingSessionId,
+    sessionIndex,
+    createdBy,
+    language,
+    template: templateId,
+  });
+}
+
 export async function getSoapNote(id) {
   if (!id) return null;
   const note = await SoapNote.findById(id).lean();
@@ -77,11 +98,10 @@ export async function getSoapNote(id) {
 
 export async function updateSoapNoteSection(id, section, value) {
   if (!id || !section) return null;
-  const allowed = new Set(["subjective", "objective", "assessment", "plan"]);
-  if (!allowed.has(section)) return null;
 
   const note = await SoapNote.findById(id);
   if (!note) return null;
+  if (!getTemplateSectionKeys(note.template).includes(section)) return null;
   const nextContent = {
     ...(note.content || {}),
     [section]: encryptField(sanitizeClinicalHtml(value), `${SOAP_CONTENT_CONTEXT}.${section}`),

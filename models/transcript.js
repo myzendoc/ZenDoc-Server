@@ -8,6 +8,7 @@ const transcriptSchema = new mongoose.Schema(
     sessionIndex: { type: Number, index: true },
     meetingSessionId: { type: mongoose.Schema.Types.ObjectId, ref: "MeetingSession", index: true },
     text: { type: String, required: true },
+    language: { type: String },
   },
   { timestamps: true }
 );

@@ -106,6 +106,18 @@ function mfaKey(req) {
   return subject ? `mfa:${hashIdentifier(subject)}` : ipKey(req);
 }
 
+export const askRateLimit = createRequestLimiter({
+  name: "ask",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 60,
+});
+
+export const recordingRateLimit = createRequestLimiter({
+  name: "recording",
+  windowMs: ONE_HOUR_MS,
+  limit: 20,
+});
+
 export const mfaVerifyRateLimit = createRequestLimiter({
   name: "mfa-verify",
   windowMs: FIFTEEN_MINUTES_MS,

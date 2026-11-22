@@ -10,6 +10,8 @@ const soapNoteSchema = new mongoose.Schema(
     sessionIndex: { type: Number, index: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     summary: { type: String },
+    language: { type: String },
+    template: { type: String, default: "soap", index: true },
   },
   { timestamps: true }
 );

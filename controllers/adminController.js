@@ -24,15 +24,19 @@ function toDashboardUser(user) {
   const display = String(user.displayName || "").trim();
   const email = String(user.email || "").trim().toLowerCase();
   const emailLocal = email.includes("@") ? email.split("@")[0] : email;
+  // Some accounts carry the email local part as a first name; that is not a name.
   const firstIsEmailLocal = first && emailLocal && first.toLowerCase() === emailLocal;
-  const preferredFromNames = display || last || (firstIsEmailLocal ? "" : first);
-  const displayName = preferredFromNames || emailLocal || "User";
+  const firstName = firstIsEmailLocal ? "" : first;
+  const fullName = [firstName, last].filter(Boolean).join(" ");
+  const displayName = fullName || display || emailLocal || "User";
   const sessions = user.meetingCount || 0;
   const totalSeconds = user.totalMeetingSeconds || 0;
   const avgSeconds = sessions > 0 ? Math.floor(totalSeconds / sessions) : 0;
   return {
     id: user._id,
     name: displayName,
+    firstName,
+    lastName: last,
     email: user.email,
     totalMeetingHours: toHourString(totalSeconds),
     totalMeetingSeconds: totalSeconds,

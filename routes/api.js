@@ -19,6 +19,8 @@ import {
   getNotesMeeting,
   invitePatientToMeeting,
   renameNotesMeeting,
+  generateMeetingNote,
+  fetchNoteTemplates,
 } from "../controllers/dashboardController.js";
 import {
   deactivateUserAccount,
@@ -38,6 +40,9 @@ import {
   openBreakGlass,
 } from "../controllers/breakGlassController.js";
 import { getAnalyticsSummary } from "../controllers/analyticsController.js";
+import { askAboutMeeting, askAcrossRecords, askConfigured, fetchAskStatus } from "../controllers/askController.js";
+import { getRecordingQuota, ingestRecording } from "../controllers/recordingController.js";
+import { MAX_RECORDING_BYTES } from "../services/recordingIngestService.js";
 import {
   createCheckoutSession,
   createPortalSession,
@@ -54,6 +59,8 @@ import {
   passwordResetRequestRateLimit,
   signupRateLimit,
   mfaVerifyRateLimit,
+  askRateLimit,
+  recordingRateLimit,
 } from "../middleware/rateLimit.js";
 
 const router = express.Router();
@@ -133,9 +140,11 @@ router.patch("/dashboard/meetings/:id/notes/:noteId", requireAuth, updateMeeting
 router.post("/dashboard/meetings/:id/private-notes", requireAuth, createPrivateMeetingNote);
 router.get("/dashboard/meetings/:id/private-notes", requireAuth, getPrivateMeetingNotes);
 router.patch("/dashboard/meetings/:id/private-notes/:noteId", requireAuth, updatePrivateMeetingNote);
+router.get("/note-templates", requireAuth, fetchNoteTemplates);
 router.get("/notes/meetings", requireAuth, listNotesMeetings);
 router.get("/notes/meetings/:id", requireAuth, getNotesMeeting);
 router.patch("/notes/meetings/:id", requireAuth, renameNotesMeeting);
+router.post("/notes/meetings/:id/generate", requireAuth, askRateLimit, generateMeetingNote);
 router.delete("/notes/meetings/:id", requireAuth, deleteNotesMeeting);
 
 router.get("/public/meetings/:roomId", getPublicMeeting);
@@ -154,5 +163,20 @@ router.get("/admin/break-glass", requireAuth, requireAdmin, listBreakGlass);
 router.get("/admin/break-glass/:grantId/records", requireAuth, requireAdmin, getBreakGlassRecords);
 router.post("/admin/break-glass/:grantId/revoke", requireAuth, requireAdmin, closeBreakGlass);
 router.get("/analytics/summary", requireAuth, getAnalyticsSummary);
+
+// Retrieval is pinned to the caller's own records inside askService.
+router.get("/recordings/quota", requireAuth, getRecordingQuota);
+// Raw bytes: the audio is streamed to Deepgram and never written to disk.
+router.post(
+  "/recordings",
+  requireAuth,
+  recordingRateLimit,
+  express.raw({ type: ["audio/*", "video/*"], limit: MAX_RECORDING_BYTES }),
+  ingestRecording
+);
+
+router.get("/ask/status", requireAuth, fetchAskStatus);
+router.post("/ask", requireAuth, askRateLimit, askConfigured, askAcrossRecords);
+router.post("/ask/meeting/:meetingId", requireAuth, askRateLimit, askConfigured, askAboutMeeting);
 
 export default router;

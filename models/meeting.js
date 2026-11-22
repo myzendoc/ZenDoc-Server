@@ -14,6 +14,9 @@ const meetingSchema = new mongoose.Schema(
     endedAt: { type: Date },
     sessionsCount: { type: Number, default: 0 },
     currentSessionIndex: { type: Number },
+    transcriptLanguage: { type: String, default: "auto" },
+    // How the visit was captured; uploads are metered separately from calls.
+    source: { type: String, enum: ["live", "voice_visit", "upload"], default: "live", index: true },
   },
   { timestamps: true }
 );

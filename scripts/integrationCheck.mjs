@@ -365,7 +365,7 @@ await check("a provider cannot reach break-glass at all", async () => {
 await check("GET /admin/compliance reports jobs and retention", async () => {
   const { status, data } = await call(adminJar, "GET", "/admin/compliance");
   assert.equal(status, 200);
-  assert.equal(data.jobs.length, 2);
+  assert.equal(data.jobs.length, 3);
   assert.ok(data.retention.retentionDays >= 2191);
   assert.ok(data.retention.rows.length >= 5);
 });
@@ -397,6 +397,56 @@ await check("audit logs never capture request bodies", async () => {
   assert.ok(!blob.includes("correct-horse-battery"), "passwords must never reach the audit log");
   assert.ok(!blob.includes("Jane Doe"), "PHI must never reach the audit log");
   assert.ok(!blob.includes(adminSecret), "MFA secrets must never reach the audit log");
+});
+
+/* ---------------- ask (AI search) ---------------- */
+
+await check("GET /ask/status requires authentication", async () => {
+  const { status } = await call(jar(), "GET", "/ask/status");
+  assert.equal(status, 401);
+});
+
+await check("POST /ask requires authentication", async () => {
+  const { status } = await call(jar(), "POST", "/ask", { question: "anything" });
+  assert.equal(status, 401);
+});
+
+await check("GET /ask/status reports the caller's own index only", async () => {
+  const { status, data } = await call(provider, "GET", "/ask/status");
+  assert.equal(status, 200);
+  assert.equal(typeof data.indexedChunks, "number");
+  assert.equal(typeof data.indexedVisits, "number");
+});
+
+await check("POST /ask rejects an empty question", async () => {
+  const { status, data } = await call(provider, "POST", "/ask", { question: "   " });
+  assert.ok([400, 503].includes(status), `unexpected status ${status}`);
+  assert.ok(data.error);
+});
+
+await check("POST /ask/meeting rejects a meeting the caller does not own", async () => {
+  const foreign = await db.collection("meetings").insertOne({
+    roomId: `foreign-${Date.now()}`,
+    createdBy: new mongoose.Types.ObjectId(),
+    createdAt: new Date(),
+    deletedAt: null,
+  });
+  const { status, data } = await call(provider, "POST", `/ask/meeting/${foreign.insertedId}`, {
+    question: "What were the symptoms?",
+  });
+  assert.equal(status, 404, `expected 404, got ${status}`);
+  assert.equal(data.error, "Meeting not found");
+});
+
+await check("POST /ask/meeting rejects a malformed id without leaking", async () => {
+  const { status } = await call(provider, "POST", "/ask/meeting/not-an-id", { question: "test" });
+  assert.ok([404, 503].includes(status), `unexpected status ${status}`);
+});
+
+await check("ask requests are audited as PHI access", async () => {
+  const entry = await db.collection("auditlogs").findOne({ path: /ask\/status/ });
+  assert.ok(entry, "ask requests must appear in the audit log");
+  assert.ok(entry.actorUserId, "ask access must be attributable");
 });
 
 await mongoose.disconnect();

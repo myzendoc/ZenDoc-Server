@@ -2,6 +2,7 @@ import { Meeting } from "../models/meeting.js";
 import { MeetingSession } from "../models/meetingSession.js";
 import { User } from "../models/user.js";
 import { Transcript } from "../models/transcript.js";
+import { KnowledgeChunk } from "../models/knowledgeChunk.js";
 import { SoapNote } from "../models/soapNote.js";
 import { PrivateNote } from "../models/privateNote.js";
 import { decryptMeeting } from "./meetingService.js";
@@ -12,11 +13,24 @@ const SAFE_CREATOR_FIELDS = "_id firstName lastName displayName email";
 // Titles carry patient names, so treated as PHI.
 export const SESSION_TITLE_CONTEXT = "MeetingSession.title";
 
+export const SESSION_AUTO_TITLE_CONTEXT = "MeetingSession.autoTitle";
+
 export function decryptSession(session) {
   if (!session) return session;
   const plain = typeof session.toObject === "function" ? session.toObject() : { ...session };
   if (plain.title) plain.title = decryptFieldOrNull(plain.title, SESSION_TITLE_CONTEXT) ?? "";
+  if (plain.autoTitle) plain.autoTitle = decryptFieldOrNull(plain.autoTitle, SESSION_AUTO_TITLE_CONTEXT) ?? "";
   return plain;
+}
+
+export async function setSessionAutoTitle(sessionId, autoTitle) {
+  const text = String(autoTitle || "").trim().slice(0, 80);
+  if (!sessionId || !text) return null;
+  return MeetingSession.findByIdAndUpdate(
+    sessionId,
+    { $set: { autoTitle: encryptField(text, SESSION_AUTO_TITLE_CONTEXT) } },
+    { new: true }
+  ).lean();
 }
 
 export function encryptSessionTitle(title) {
@@ -154,6 +168,7 @@ export async function deleteMeetingSessionWithData(sessionId, { actorId, reason 
     Transcript.softDelete({ meetingSessionId: session._id }, audit),
     SoapNote.softDelete({ meetingSessionId: session._id }, audit),
     PrivateNote.softDelete({ meetingSessionId: session._id }, audit),
+    KnowledgeChunk.softDelete({ meetingSessionId: session._id }, audit),
     MeetingSession.softDelete({ _id: session._id }, audit),
   ]);
 

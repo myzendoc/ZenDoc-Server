@@ -11,7 +11,12 @@ import {
   listMeetingSessionsWithContext,
   renameMeetingSession,
 } from "../services/meetingSessionService.js";
-import { createSoapNote, getSoapNote, getSoapNotesByMeeting, getSoapNotesBySession, updateSoapNoteSection } from "../services/soapNoteService.js";
+import { createSoapNote, getSoapNote, getSoapNotesByMeeting, getSoapNotesBySession, replaceSoapNoteForTemplate, updateSoapNoteSection } from "../services/soapNoteService.js";
+import { generateClinicalNote } from "../services/soapsService.js";
+import { listNoteTemplates, resolveTemplateId } from "../utils/noteTemplates.js";
+import { resolveNoteLanguage } from "../utils/languages.js";
+import { getDominantTranscriptLanguage } from "../services/transcriptService.js";
+import { indexInBackground, indexPrivateNote, indexSoapNote } from "../services/knowledgeIndexService.js";
 import { createPrivateNote, getPrivateNotesByMeeting, getPrivateNotesBySession, updatePrivateNote } from "../services/privateNoteService.js";
 import { getTranscriptsByRoom } from "../services/transcriptService.js";
 import { FREE_SOAP_TRANSCRIPT_LIMIT, getUserEntitlements, isFreeSessionLimitExceeded } from "../services/entitlementService.js";
@@ -64,9 +69,13 @@ function serializeSessionRecord(record, req) {
   const clientBase = buildClientBase(req);
   const joinLink = `${clientBase}/room/${meeting.roomId}`;
 
+  const index = Number(record?.sessionIndex);
   return {
     ...meeting,
     title: normalizeSessionTitle(record, meeting),
+    // The AI title heads the list; the visit number stays as a second label.
+    autoTitle: typeof record?.autoTitle === "string" ? record.autoTitle : "",
+    visitLabel: Number.isFinite(index) && index > 0 ? `Visit ${index}` : "",
     _id: record._id || meeting._id,
     meetingId: meeting._id,
     creatorPeerId: record.creatorPeerId || meeting.creatorPeerId,
@@ -287,6 +296,7 @@ export async function updatePrivateMeetingNote(req, res) {
       res.status(404).json({ error: "Private note not found" });
       return;
     }
+    indexInBackground(() => indexPrivateNote(note._id), "private_note");
     res.json({ note });
   } catch (err) {
     sendErrorResponse(res, err, { fallback: "Failed to update private note", status: 400, event: "meeting.private_note_update_failed" });
@@ -315,6 +325,7 @@ export async function createPrivateMeetingNote(req, res) {
         content,
         createdBy: req.user?._id,
       });
+      indexInBackground(() => indexPrivateNote(note._id), "private_note");
       res.json({ note });
       return;
     }
@@ -334,6 +345,7 @@ export async function createPrivateMeetingNote(req, res) {
       content,
       createdBy: req.user?._id,
     });
+    indexInBackground(() => indexPrivateNote(note._id), "private_note");
     res.json({ note });
   } catch {
     res.status(400).json({ error: "Failed to save private note" });
@@ -436,6 +448,7 @@ export async function createMeetingNote(req, res) {
         summary,
         createdBy: req.user?._id,
       });
+      indexInBackground(() => indexSoapNote(note?._id), "soap");
       res.json({ note });
       return;
     }
@@ -457,9 +470,75 @@ export async function createMeetingNote(req, res) {
       summary,
       createdBy: req.user?._id,
     });
+    indexInBackground(() => indexSoapNote(note?._id), "soap");
     res.json({ note });
   } catch (err) {
     res.status(400).json({ error: "Failed to save note" });
+  }
+}
+
+export function fetchNoteTemplates(_req, res) {
+  res.json({ templates: listNoteTemplates() });
+}
+
+// Generates one of the alternative note formats on demand, from the visit's
+// existing transcript. The default SOAP note is produced when the call ends.
+export async function generateMeetingNote(req, res) {
+  try {
+    const session = await resolveSessionByParam(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    if (!canAccessMeeting(session.meeting, req.user)) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+
+    const template = resolveTemplateId(req.body?.template);
+    const planLimit = await getPlanLimitInfoForSession(session);
+    if (planLimit.planLimitExceeded) {
+      res.status(402).json({ error: planLimit.planLimitMessage });
+      return;
+    }
+
+    const transcripts = session.fallbackMeeting
+      ? await getTranscriptsByRoom(session.meeting.roomId)
+      : await getTranscriptsByRoom(session.meeting.roomId, {
+          meetingSessionId: session._id,
+          sessionIndex: session.sessionIndex,
+        });
+    const text = transcripts.map((item) => item.text).filter(Boolean).join("\n");
+    if (!text.trim()) {
+      res.status(422).json({ error: "This visit has no transcript to work from" });
+      return;
+    }
+
+    const detected = await getDominantTranscriptLanguage(
+      session.meeting.roomId,
+      session.fallbackMeeting ? undefined : session.sessionIndex
+    );
+    const language = resolveNoteLanguage({ selected: session.meeting.transcriptLanguage, detected });
+    const content = await generateClinicalNote(text, { language, template });
+    if (!content || !Object.keys(content).length) {
+      res.status(502).json({ error: "Could not generate that note, try again" });
+      return;
+    }
+
+    const note = await replaceSoapNoteForTemplate({
+      roomId: session.meeting.roomId,
+      content,
+      meetingId: session.meeting._id,
+      meetingSessionId: session.fallbackMeeting ? undefined : session._id,
+      sessionIndex: session.sessionIndex,
+      createdBy: req.user?._id,
+      language,
+      template,
+    });
+    indexInBackground(() => indexSoapNote(note?._id), "soap");
+    res.json({ note });
+  } catch (err) {
+    sendErrorResponse(res, err, { fallback: "Failed to generate note", status: 500, event: "meeting.note_generate_failed" });
   }
 }
 
@@ -513,6 +592,7 @@ export async function updateMeetingNote(req, res) {
         return;
       }
       const note = await updateSoapNoteSection(req.params.noteId, section, content);
+      indexInBackground(() => indexSoapNote(req.params.noteId), "soap");
       res.json({ note });
       return;
     }
@@ -533,6 +613,7 @@ export async function updateMeetingNote(req, res) {
       return;
     }
     const note = await updateSoapNoteSection(req.params.noteId, section, content);
+    indexInBackground(() => indexSoapNote(req.params.noteId), "soap");
     res.json({ note });
   } catch {
     res.status(400).json({ error: "Failed to update note" });

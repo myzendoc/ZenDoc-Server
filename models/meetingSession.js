@@ -6,6 +6,7 @@ const meetingSessionSchema = new mongoose.Schema(
     meetingId: { type: mongoose.Schema.Types.ObjectId, ref: "Meeting", required: true, index: true },
     roomId: { type: String, required: true, index: true },
     title: { type: String },
+    autoTitle: { type: String },
     sessionIndex: { type: Number, required: true },
     startedAt: { type: Date, required: true },
     endedAt: { type: Date },

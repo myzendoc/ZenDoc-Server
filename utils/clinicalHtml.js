@@ -1,4 +1,5 @@
 import sanitizeHtml from "sanitize-html";
+import { getAllSectionKeys } from "./noteTemplates.js";
 
 const ALLOWED_TAGS = [
   "p",
@@ -29,7 +30,7 @@ const ALLOWED_TAGS = [
   "td",
 ];
 
-const SOAP_CONTENT_KEYS = new Set(["subjective", "objective", "assessment", "plan", "note"]);
+const SOAP_CONTENT_KEYS = getAllSectionKeys();
 
 export function sanitizeClinicalHtml(value) {
   return sanitizeHtml(String(value || ""), {

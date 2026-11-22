@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { JobLock } from "../models/jobLock.js";
 import { purgeExpiredRecords } from "./retentionService.js";
+import { backfillMissingChunks } from "./knowledgeIndexService.js";
 import { verifyAuditChain } from "./auditLogService.js";
 import { isChainConfigured } from "../utils/auditChain.js";
 import { User } from "../models/user.js";
@@ -103,7 +104,12 @@ async function auditVerifyJob() {
   return { checked: result.checked, ok: false, problems: result.problems.length };
 }
 
+async function knowledgeBackfillJob() {
+  return backfillMissingChunks({ limit: 25 });
+}
+
 const JOBS = [
+  { name: "knowledge-index-backfill", intervalHours: () => hoursFromEnv("KNOWLEDGE_BACKFILL_INTERVAL_HOURS", 6), task: knowledgeBackfillJob },
   { name: "phi-retention-purge", intervalHours: () => hoursFromEnv("PHI_PURGE_INTERVAL_HOURS", 24), task: purgeJob },
   { name: "audit-chain-verify", intervalHours: () => hoursFromEnv("AUDIT_VERIFY_INTERVAL_HOURS", 24), task: auditVerifyJob },
 ];

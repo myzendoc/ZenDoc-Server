@@ -1,11 +1,13 @@
-import { getRoomTranscript } from "./transcriptService.js";
-import { generateSoaps } from "./soapsService.js";
+import { getDominantTranscriptLanguage, getRoomTranscript } from "./transcriptService.js";
+import { generateSoaps, generateVisitTitle } from "./soapsService.js";
 import { createSoapNote } from "./soapNoteService.js";
-import { endMeetingSession, getLatestMeetingSessionForRoom, startMeetingSession } from "./meetingSessionService.js";
+import { indexInBackground, indexSessionArtifacts } from "./knowledgeIndexService.js";
+import { endMeetingSession, getLatestMeetingSessionForRoom, setSessionAutoTitle, startMeetingSession } from "./meetingSessionService.js";
 import { getMeeting, getMeetingById } from "./meetingService.js";
 import { getUserById } from "./userService.js";
 import { sendSessionEndedEmail, sendSoapReadyEmail } from "../utils/mailer.js";
 import { getUserEntitlements, isFreeSessionLimitExceeded } from "./entitlementService.js";
+import { resolveLanguage, resolveNoteLanguage } from "../utils/languages.js";
 import { logError } from "../utils/logging.js";
 
 class SessionManager {
@@ -24,6 +26,7 @@ class SessionManager {
         sessionIndex: null,
         meetingId: null,
         createdBy: null,
+        transcriptLanguage: null,
       });
     }
     return this.rooms.get(roomId);
@@ -37,7 +40,23 @@ class SessionManager {
       sessionIndex: room.sessionIndex,
       meetingId: room.meetingId,
       createdBy: room.createdBy,
+      transcriptLanguage: resolveLanguage(room.transcriptLanguage),
     };
+  }
+
+  getTranscriptLanguage(roomId) {
+    return resolveLanguage(this.rooms.get(roomId)?.transcriptLanguage);
+  }
+
+  setTranscriptLanguage(roomId, language) {
+    const room = this.ensureRoom(roomId);
+    room.transcriptLanguage = resolveLanguage(language);
+    return room.transcriptLanguage;
+  }
+
+  listProcesses(roomId) {
+    const room = this.rooms.get(roomId);
+    return room ? [...room.processes.keys()] : [];
   }
 
   async startSession(roomId, { creatorPeerId, creatorSocketId } = {}) {
@@ -54,6 +73,7 @@ class SessionManager {
     room.sessionIndex = session?.sessionIndex ?? null;
     room.meetingId = meeting?._id || null;
     room.createdBy = meeting?.createdBy || null;
+    room.transcriptLanguage = resolveLanguage(meeting?.transcriptLanguage);
     room.sessionEnded = false;
     room.finalizing = false;
     room.finalizePromise = null;
@@ -140,17 +160,37 @@ class SessionManager {
       };
     }
 
-    const soaps = await generateSoaps(transcript);
+    const detected = await getDominantTranscriptLanguage(roomId, room.sessionIndex);
+    const language = resolveNoteLanguage({ selected: room.transcriptLanguage, detected });
+    const soaps = await generateSoaps(transcript, { language });
+    let note = null;
     if (soaps) {
-      await createSoapNote({
+      note = await createSoapNote({
         roomId,
         content: soaps,
         meetingId: room.meetingId,
         meetingSessionId: room.sessionId,
         sessionIndex: room.sessionIndex,
         createdBy: room.createdBy,
+        language,
       });
     }
+
+    if (room.sessionId) {
+      const title = await generateVisitTitle(transcript, { language });
+      if (title) await setSessionAutoTitle(room.sessionId, title);
+    }
+
+    indexInBackground(
+      () =>
+        indexSessionArtifacts({
+          roomId,
+          sessionIndex: room.sessionIndex,
+          meetingSessionId: room.sessionId,
+          soapNoteId: note?._id,
+        }),
+      "session"
+    );
 
     return {
       transcript,

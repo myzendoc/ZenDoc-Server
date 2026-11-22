@@ -29,6 +29,12 @@ const ALLOWED_METADATA_KEYS = new Set([
   "documentVersion",
   "parentResourceId",
   "role",
+  "language",
+  "scope",
+  "candidateCount",
+  "sourceCount",
+  "disclosedSources",
+  "chunks",
 ]);
 
 function sanitizeMetadataValue(value, depth = 0) {

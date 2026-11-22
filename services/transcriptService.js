@@ -1,5 +1,6 @@
 import { Transcript } from "../models/transcript.js";
 import { decryptFieldOrNull, encryptField } from "../utils/fieldCipher.js";
+import { normalizeLanguageCode } from "../utils/languages.js";
 import { logError } from "../utils/logging.js";
 
 // Reads use .lean(), which bypasses getters, so encryption is explicit here.
@@ -19,7 +20,7 @@ export function decryptTranscriptDoc(doc) {
   return { ...doc, text: readTranscriptText(doc) };
 }
 
-export async function saveFinalTranscript({ roomId, peerId, text, sessionIndex, meetingSessionId }) {
+export async function saveFinalTranscript({ roomId, peerId, text, sessionIndex, meetingSessionId, language }) {
   if (!roomId || !text) return null;
   const trimmed = text.trim();
   if (!trimmed) return null;
@@ -29,7 +30,31 @@ export async function saveFinalTranscript({ roomId, peerId, text, sessionIndex, 
     text: encryptField(trimmed, TRANSCRIPT_TEXT_CONTEXT),
     sessionIndex,
     meetingSessionId,
+    language: normalizeLanguageCode(language) || undefined,
   });
+}
+
+// The language most of the session was spoken in, used to pick the note language.
+export async function getDominantTranscriptLanguage(roomId, sessionIndex) {
+  if (!roomId) return "";
+  const filter = { roomId };
+  if (sessionIndex !== undefined && sessionIndex !== null) filter.sessionIndex = sessionIndex;
+  const docs = await Transcript.find(filter, { language: 1 }).lean();
+  const counts = new Map();
+  for (const doc of docs) {
+    const code = normalizeLanguageCode(doc?.language);
+    if (!code || code === "auto") continue;
+    counts.set(code, (counts.get(code) || 0) + 1);
+  }
+  let best = "";
+  let bestCount = 0;
+  for (const [code, count] of counts) {
+    if (count > bestCount) {
+      best = code;
+      bestCount = count;
+    }
+  }
+  return best;
 }
 
 export async function getRoomTranscript(roomId, sessionIndex) {

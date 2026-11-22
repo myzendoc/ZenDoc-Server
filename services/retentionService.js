@@ -4,6 +4,7 @@ import { SoapNote } from "../models/soapNote.js";
 import { PrivateNote } from "../models/privateNote.js";
 import { MeetingSession } from "../models/meetingSession.js";
 import { Meeting } from "../models/meeting.js";
+import { KnowledgeChunk } from "../models/knowledgeChunk.js";
 import { DisposalRecord } from "../models/disposalRecord.js";
 import { getRetentionCutoff, getRetentionDays } from "../models/plugins/softDelete.js";
 
@@ -12,6 +13,7 @@ const PURGE_TARGETS = [
   { name: "transcripts", model: Transcript },
   { name: "soapnotes", model: SoapNote },
   { name: "privatenotes", model: PrivateNote },
+  { name: "knowledgechunks", model: KnowledgeChunk },
   { name: "meetingsessions", model: MeetingSession },
   { name: "meetings", model: Meeting },
 ];
